@@ -1,0 +1,41 @@
+# 本地知识库，不纳入版本控制
+.learnings/
+
+# 本地 Claude 配置与私有 skills（用户全局 CLAUDE.md 强制要求）
+.claude/
+
+# Python 虚拟环境与缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Node / 前端构建产物与依赖
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# 日志与临时工作区
+*.log
+workspaces/
+blobs/
+data/
+tmp/
+.cache/
+
+# 环境变量与密钥（严禁入库，见 CLAUDE.md 模型接入章节）
+.env
+.env.*
+!.env.example
+
+# 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
