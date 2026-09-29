@@ -9,14 +9,10 @@
 
 ## 待办
 - [ ] 实现 12 个内置工具注册（Bash/Read/Write/Edit/Glob/Grep/Task×4/计算器/AskUser）— 优先级：高（阶段一 spec 模块 C）
-
-## 待办
-- [ ] 实现 12 个内置工具注册（Bash/Read/Write/Edit/Glob/Grep/Task×4/计算器/AskUser）— 优先级：高（阶段一 spec 模块 C）
 - [ ] 实现四大记忆机制：上下文注入 / 压缩 / 卸载 / 长期记忆 — 优先级：高（阶段一 spec 模块 D）
 - [ ] 实现工作区 Git 化 + git-diff API（前端 diff 视图前置）— 优先级：高（阶段一 spec 模块 F-0）
 - [ ] 实现 HITL 权限引擎（高危命令黑名单 + 确认流）— 优先级：中（阶段一 spec 模块 E）
 - [ ] 移植股票分析项目 calculator.py 为通用计算器工具 — 优先级：中
-- [ ] 前端：右侧结果区 4 个 Tab（预览/文件/Diff/下载），HTML+Markdown 预览 — 优先级：中（阶段三 spec）
 - [ ] 跑通"通用 Agent"端到端最小闭环后，再规划股票分析改造 — 优先级：中（依赖通用 Agent 先工作）
 - [ ] 评估复用 `/media/data/git/股票分析/scripts/tencent_stock.py` 作为 Toolkit 工具 — 优先级：低（阶段二）
 - [ ] 设计 portfolio JSON 读写工具（遵守无引号规范）— 优先级：低（阶段二）
@@ -32,3 +28,5 @@
 - [x] 升级 AgentScope 到 2.0.8：以 editable 模式安装本地源码（含 `[service,storage-redis]` extras）— 2026-09-28
 - [x] 重跑 AgentScope 2.0.8 + LiteLLM `v-flash` 端到端验证：流式输出与完整事件序列均通过，摸清 2.0 的 6 个 API 破坏性变更 — 2026-09-28
 - [x] 制定实施计划：主计划 + Part 1（后端 14 任务 TDD）+ Part 2（前端 12 任务 TDD），均含完整代码与验证命令 — 2026-09-28
+- [x] 完成前端 Part 2（12 任务）：SSE 契约/API 客户端/Mock/3 个 Pinia stores/3 栏布局/共 29 个源文件 + 12 个测试文件，87 tests passed，typecheck 干净，dev 与 prod build 均通过 — 2026-09-29
+  - 含 4 处计划外适配：splitpanes v4 resize 载荷真实 API / lightningcss errorRecovery 兼容 DevUI / erasableSyntaxOnly 下构造函数不能有参数属性 / `<think>` 标签跨 chunk 的状态机（避免闭合标签泄漏到答案）
