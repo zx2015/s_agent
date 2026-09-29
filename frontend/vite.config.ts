@@ -9,6 +9,14 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  css: {
+    // vue-devui ships a CSS bundle that contains legacy IE hacks like
+    // `*zoom`, which lightningcss refuses to minify by default. Skipping
+    // those rules is harmless in modern browsers.
+    lightningcss: {
+      errorRecovery: true,
+    },
+  },
   server: {
     port: 5173,
     proxy: {

@@ -6,6 +6,7 @@
  * status code lets callers distinguish "this task has no artifacts yet"
  * (404) from "the backend is down" (network error).
  */
+import { parseSseFrame, splitSseBuffer } from './events'
 
 export class ApiError extends Error {
   readonly status: number
@@ -79,8 +80,6 @@ export class ApiClient {
     path: string,
     body: unknown,
   ): AsyncGenerator<{ event: string; data: Record<string, unknown> }> {
-    const { parseSseFrame, splitSseBuffer } = await import('./events')
-
     const response = await fetch(this.url(path), {
       method: 'POST',
       headers: {

@@ -1,16 +1,58 @@
 <template>
-  <div class="app-root">
-    <h1>s_agent Workbench</h1>
+  <div class="app-shell">
+    <header class="top-bar">
+      <span class="brand">s_agent 工作台</span>
+      <span v-if="workspace.activeTask" class="active-task">
+        {{ workspace.activeTask.title }}
+      </span>
+    </header>
+
+    <main class="app-body">
+      <ThreeColumnLayout />
+    </main>
+
+    <SettingsDrawer />
   </div>
 </template>
 
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import ThreeColumnLayout from '@/components/layout/ThreeColumnLayout.vue'
+import SettingsDrawer from '@/components/sidebar/SettingsDrawer.vue'
+import { useWorkspaceStore } from '@/store/workspaces'
+
+const workspace = useWorkspaceStore()
+</script>
 
 <style scoped>
-.app-root {
+.app-shell {
   height: 100%;
   display: flex;
+  flex-direction: column;
+}
+
+.top-bar {
+  height: var(--topbar-height);
+  display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.brand {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.active-task {
+  font-size: 12px;
+  color: #86909c;
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;
 }
 </style>
