@@ -56,3 +56,14 @@ REDIS_URL = os.getenv("S_AGENT_REDIS_URL", "redis://127.0.0.1:6380/0")
 AGENT_STATE_TTL_SECONDS = int(
     os.getenv("S_AGENT_STATE_TTL_DAYS", "30"),
 ) * 86400
+
+# --- MCP (Model Context Protocol) servers ---
+# JSON array of {"name", "url", "is_stateful"?} objects fed to AgentScope
+# as external tools. Default is the local Tavily container
+# (docker container `mcp-tavily`, host port 18000, Streamable HTTP at
+# /mcp) — verified reachable on 2026-09-30 via a curl initialize probe.
+# Set to "" (or comment out) to disable MCP entirely.
+MCP_SERVERS = os.getenv(
+    "S_AGENT_MCP_SERVERS",
+    '[{"name": "tavily", "url": "http://127.0.0.1:18000/mcp"}]',
+)

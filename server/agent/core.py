@@ -12,9 +12,12 @@ itself (`agentscope.tool.{Bash,Read,Write,Edit,Glob,Grep,TaskCreate,
 TaskGet,TaskList,TaskUpdate,AskUser}`) — nothing to reimplement there.
 Only the calculator is project-specific.
 """
+import logging
 import os
 import platform
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from agentscope.agent import Agent
 from agentscope.credential import OpenAICredential
@@ -41,6 +44,7 @@ from agentscope.tool import (
 
 from server import config
 from server.tools.calculator import calculate
+from server.tools.mcp import build_mcp_clients, parse_mcp_servers
 
 # This is only layer 1 of what the model actually receives as its system
 # prompt — AgentScope appends toolkit skill/offloader instructions on top
@@ -134,7 +138,19 @@ async def build_agent(workspace_dir: Path, state: AgentState | None = None) -> A
     resolved_dir = str(workspace_dir.resolve())
     backend = LocalBackend()
 
-    toolkit = Toolkit()
+    # MCP servers are supplementary: a typo in the config, or a container
+    # that is down, must not cost the user their whole agent. Degrade to
+    # "no MCP tools" with a loud log line instead of failing the turn —
+    # the built-in tools below still work either way.
+    try:
+        mcp_clients = build_mcp_clients(parse_mcp_servers(config.MCP_SERVERS))
+    except ValueError as exc:
+        logger.error(
+            "Ignoring MCP configuration (S_AGENT_MCP_SERVERS): %s", exc
+        )
+        mcp_clients = []
+
+    toolkit = Toolkit(mcps=mcp_clients)
     await toolkit.add_tool(Bash(cwd=resolved_dir, backend=backend))
     await toolkit.add_tool(Read(backend=backend))
     await toolkit.add_tool(Write(backend=backend))
