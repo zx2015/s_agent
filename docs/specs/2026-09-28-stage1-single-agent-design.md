@@ -219,6 +219,15 @@
 
 ### 模块 D：记忆管理（四大机制）
 
+> ⚠️ **已过时（2026-09-30）**：本模块写于实现之前，对 AgentScope API 的假设
+> （`MemoryBase`/`ToolOffloadMiddleware`/`AgenticMemoryMiddleware`/
+> `CompressionConfig`/`on_compress_context` 中间件等）与实际安装的 2.0.8
+> 源码不符（真实 API 是 `AgentState`/`ContextConfig`/`InjectionConfig`/
+> `Offloader`）。实际落地的设计、以及会话隔离性与 Redis 持久化的可靠性实
+> 测结果，请见
+> [2026-09-30-conversation-memory-management.md](2026-09-30-conversation-memory-management.md)。
+> 保留本节原文仅供了解最初的规划思路。
+
 **D-1 上下文注入（Context Injection）**
 
 - 机制：AgentScope 2.0 `InjectionConfig`

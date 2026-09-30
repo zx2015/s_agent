@@ -274,6 +274,10 @@ tools = await toolkit.get_tool_schemas(...)  # 12 个工具的 JSON Schema，走
 
 ⚠️ **官方在线文档 `doc.agentscope.io` 的 State/Session Management 页面与本地实际安装的 2.0.8 源码完全对不上**：文档描述的是 `StateModule` / `agent.state_dict()` / `agent.load_state_dict()` / `agentscope.session.JSONSession` 这套 API，但本地安装（`/media/data/git/agentscope/src/agentscope`，editable 模式）里 `agentscope.session` 模块根本不存在（`import` 直接报 `ModuleNotFoundError`），`Agent` 也没有 `state_dict()` 方法。遇到类似情况——**以本地实际安装的源码为准，别信在线文档**，这也是本项目从 1.0.21 升级到 2.0 时已经踩过的同一类坑（见上文"后端 AgentScope 版本契约"）。
 
+> 完整设计（含任务间隔离性的实测验证、Redis 自身持久化可靠性的实测边界、
+> 与原规划文档的差异对照）见
+> [docs/specs/2026-09-30-conversation-memory-management.md](docs/specs/2026-09-30-conversation-memory-management.md)。
+
 ---
 
 ## 核心行为准则（继承全局与本地最佳实践）
@@ -311,5 +315,6 @@ tools = await toolkit.get_tool_schemas(...)  # 12 个工具的 JSON Schema，走
 - 阶段演进偏好：[.learnings/preference/project-evolution.md](.learnings/preference/project-evolution.md)
 - 项目任务追踪：[TODO.md](TODO.md)
 - 知识库索引：[.learnings/index.md](.learnings/index.md)
+- 会话与记忆管理设计：[docs/specs/2026-09-30-conversation-memory-management.md](docs/specs/2026-09-30-conversation-memory-management.md)
 - 本地 AgentScope 源码参考：`/media/data/git/agentscope/`
 - 本地股票分析与行情接口参考：`/media/data/git/股票分析/`
