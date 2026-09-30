@@ -76,10 +76,12 @@ import { McDeleteIcon } from '@matechat/core/Toolbar'
 import { ListVariant } from '@matechat/core/List'
 import { useWorkspaceStore } from '@/store/workspaces'
 import { useSessionStore } from '@/store/session'
+import { useTodosStore } from '@/store/todos'
 import type { Task } from '@/types'
 
 const store = useWorkspaceStore()
 const session = useSessionStore()
+const todos = useTodosStore()
 const collapsed = ref<Set<string>>(new Set())
 
 /** McList's ListItemData, extended with the task fields the `#item` slot needs. */
@@ -127,11 +129,13 @@ async function onSelectTask(item: { value: string | number }): Promise<void> {
   const taskId = String(item.value)
   if (store.activeTaskId === taskId) return
   store.selectTask(taskId)
-  // Hydrate the middle pane with this task's persisted conversation history
-  // from the backend. Without this, the bubbles from the previously active
-  // task would linger on screen while the backend runs against the new task's
-  // context — a major visual disconnect.
-  await session.loadHistory(taskId)
+  // Hydrate both the chat history and the AgentScope task list in
+  // parallel. Doing them sequentially would double the round-trip
+  // latency for users switching tasks.
+  await Promise.all([
+    session.loadHistory(taskId),
+    todos.loadTodos(taskId),
+  ])
 }
 
 /**
@@ -146,6 +150,9 @@ async function onNewTaskClick(workspaceId: string): Promise<void> {
   const task = await store.createTaskRemote(workspaceId, '新任务')
   store.selectTask(task.id)
   session.reset()
+  // Brand-new tasks have no AgentScope todos yet; clear any stale state
+  // carried over from the previously selected task.
+  todos.clear()
 }
 
 /**
@@ -163,6 +170,7 @@ async function onDeleteClick(taskId: string, title: string): Promise<void> {
   await store.deleteTaskRemote(taskId)
   if (wasActive) {
     session.reset()
+    todos.clear()
   }
 }
 

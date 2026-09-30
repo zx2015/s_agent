@@ -97,3 +97,11 @@
   - 前端契约：`api/events.ts` 的 `EVENT_NAMES` 新增 `task_renamed`；`useChat.ts` 在消费流时专门拦截这个事件，直接调用 `workspaceStore.renameTask()`（该方法本来就是纯本地更新，不再打后端——因为后端此时已经落盘过了），不让它混进 `session.applyFrame` 的对话消息流里
   - 真实端到端验证：Playwright 驱动真实 Chromium，新建任务后发第一条真实消息"帮我写一个个人主页的 HTML 页面"，4 秒内侧边栏标题从"新任务"变成模型生成的"制作个人主页HTML页面"；curl 验证 `DELETE /api/workspaces/default` 返回 `400 默认工作区不能删除`
   - 新增/更新测试：新增 `tests/test_title_generator.py`（3 个：空消息不发网络请求直接兜底 / 模型调用异常时优雅降级为兜底标题而不抛出 / 真实网络调用生成的标题非空且不是兜底值——最后这个是打真实 LiteLLM 代理的集成测试，与 `test_memory_store.py` 打真实 Redis 同一测试哲学）；`tests/test_task_manager.py`（+1，默认工作区删除被拒绝且其任务不受影响）；前端 `tests/components/WorkspaceTree.spec.ts`（+1，默认工作区不渲染删除按钮）、`tests/composables/useChat.spec.ts`（+1，`task_renamed` 帧只改本地任务标题、不出现在对话气泡里）、`tests/api/events.spec.ts` 契约清单同步更新；后端测试 34→38，前端测试 110→112，typecheck 与 prod build 均验证通过
+- [x] AgentScope 内部待办（Todo）列表全链路透传 — 2026-09-30
+  - 需求背景：用户询问 AgentScope 是否有任务管理能力，经查 2.0.8 原生提供 `TaskCreate` / `TaskUpdate` / `TaskGet` / `TaskList` 4 个内置工具，并将数据持久化在 `AgentState.tasks_context.tasks`（随 AgentState 进 Redis）。此前框架已持有数据但未暴露给用户，前端无感。本项打通全链路透传与展示
+  - 数据契约与规范：新建 `docs/specs/2026-09-28-todo-display.md`，定义 `TodoItem` 结构（id/subject/description/state/owner/blocks/blockedBy/createdAt）
+  - 后端序列化：`server/service/history.py::serialize_todos` 处理状态提取，处理软删除/物理删除语义差异（实测发现 `TaskUpdate(status="deleted")` 在 AgentScope 内部为物理 `pop` 删除而非软删除标记），并增加单测覆盖
+  - 后端端点：`server/main.py` 暴露 `GET /api/tasks/{task_id}/todos`；SSE 流在 `ToolResultEndEvent` 识别到 TaskCreate/TaskUpdate 结束时，以及对话轮次结束（`ReplyEndEvent`）时，主动 yield 一帧 `task_todos_changed` 快照
+  - 前端契约与状态：`src/api/events.ts` 扩充 `task_todos_changed` 事件，`src/store/todos.ts` 提供独立 Pinia store（支持冷拉取 + 增量帧全量替换 + 切换清空）
+  - 前端 UI：右侧结果区增加第 5 个 Tab（`待办`），`TodoPanel.vue` 展示带依赖关系（blocked by #N）、状态标记（○ / ⏳ / ✓）、删除过滤切换及完成度概览（如 "1 / 3 待办完成"）的卡片列表；`SidebarRight.vue` 接入新面板；`WorkspaceTree.vue` 切换任务时并发拉取历史消息与待办列表
+  - 测试：后端新增 5 个 `serialize_todos` 测试 + 1 个事件帧测试（全量 60 passed）；前端新增 7 个 store 测试 + 6 个组件测试，更新 2 个既有测试（全量 131 passed，typecheck exit=0）

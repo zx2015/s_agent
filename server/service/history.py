@@ -126,3 +126,41 @@ def agent_state_to_chat_messages(state: AgentState | None) -> list[dict[str, Any
         )
 
     return messages
+
+
+def serialize_todos(state: AgentState | None) -> list[dict[str, Any]]:
+    """Convert an AgentState's task list into the frontend TodoItem shape.
+
+    Reads `AgentState.tasks_context.tasks` — the tasks the agent created
+    or updated during its run via `TaskCreate`/`TaskUpdate`.
+
+    Args:
+        state: The saved `AgentState` from Redis. When None or the state has
+            never had tasks recorded, returns an empty list.
+
+    Returns:
+        A list of dicts with the shape of `docs/specs/2026-09-28-todo-display.md`:
+        id, subject, description, state, owner, blocks, blockedBy, createdAt.
+    """
+    if state is None:
+        return []
+    tasks_context = getattr(state, "tasks_context", None)
+    if tasks_context is None:
+        return []
+    raw_tasks = getattr(tasks_context, "tasks", []) or []
+
+    todos: list[dict[str, Any]] = []
+    for t in raw_tasks:
+        todos.append(
+            {
+                "id": str(getattr(t, "id", "")),
+                "subject": str(getattr(t, "subject", "")),
+                "description": str(getattr(t, "description", "") or ""),
+                "state": getattr(t, "state", "pending"),
+                "owner": getattr(t, "owner", None),
+                "blocks": list(getattr(t, "blocks", []) or []),
+                "blockedBy": list(getattr(t, "blocked_by", []) or []),
+                "createdAt": str(getattr(t, "created_at", "") or ""),
+            }
+        )
+    return todos

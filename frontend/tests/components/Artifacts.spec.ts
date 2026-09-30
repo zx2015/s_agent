@@ -7,11 +7,12 @@ import DownloadPane from '@/components/artifacts/DownloadPane.vue'
 import { useSessionStore } from '@/store/session'
 
 describe('ArtifactTabs', () => {
-  it('renders all four tabs', () => {
+  it('renders all five tabs', () => {
     const wrapper = mount(ArtifactTabs, {
       props: { activeTab: 'preview' },
     })
     expect(wrapper.text()).toContain('产物预览')
+    expect(wrapper.text()).toContain('待办')
     expect(wrapper.text()).toContain('全部文件')
     expect(wrapper.text()).toContain('文件变更')
     expect(wrapper.text()).toContain('下载')
@@ -31,7 +32,9 @@ describe('ArtifactTabs', () => {
       props: { activeTab: 'preview' },
     })
     const tabs = wrapper.findAll('.tab')
-    await tabs[2].trigger('click')
+    // After adding 'todos', the indices are preview(0), todos(1), files(2),
+    // diff(3), download(4).
+    await tabs[3].trigger('click')
     expect(wrapper.emitted('update:activeTab')?.[0]).toEqual(['diff'])
   })
 })

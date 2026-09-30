@@ -278,6 +278,17 @@ tools = await toolkit.get_tool_schemas(...)  # 12 个工具的 JSON Schema，走
 > 与原规划文档的差异对照）见
 > [docs/specs/2026-09-30-conversation-memory-management.md](docs/specs/2026-09-30-conversation-memory-management.md)。
 
+### ⭐ AgentScope 内部待办（Todo）透传（2026-09-30 全链路打通）
+
+AgentScope 2.0 的 `TaskCreate` / `TaskUpdate` / `TaskGet` / `TaskList` 4 个内置工具允许模型自主拆解复杂多步任务。其数据源位于 `AgentState.tasks_context.tasks`（纯 Pydantic 对象，自动随 AgentState 存入 Redis）。项目现已打通从框架内部到前端 UI 的全链路透传：
+
+- **数据契约与规范**：详见 [docs/specs/2026-09-28-todo-display.md](docs/specs/2026-09-28-todo-display.md)。
+- **后端序列化**：`server/service/history.py::serialize_todos` 将 AgentScope `Task`（含 `blocks` / `blocked_by` 依赖关系、软删除 `deleted` 处理）清洗转为前端 `TodoItem` 格式。
+- **双通道更新**：
+  1. **冷启动**：前端切任务或刷新时通过 `GET /api/tasks/{task_id}/todos` 全量同步。
+  2. **热更新（SSE）**：后端在 `TaskCreate`/`TaskUpdate` 成功执行以及每轮对话结束（`ReplyEndEvent`）时，主动 yield 一帧 `task_todos_changed` 事件，前端整体替换快照。
+- **前端呈现**：右侧结果区第 5 个 Tab（`待办`）通过 `TodoPanel.vue` 展示带依赖提示、状态图标、折叠删除过滤的 todo 列表；状态变化驱动 `todos` Pinia store。
+
 ---
 
 ## 核心行为准则（继承全局与本地最佳实践）

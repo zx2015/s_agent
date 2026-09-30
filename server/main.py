@@ -14,8 +14,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
-from agentscope.event import ReplyEndEvent, RequireUserConfirmEvent
-from agentscope.event import UserConfirmResultEvent, ConfirmResult
+from agentscope.event import (
+    ConfirmResult,
+    ReplyEndEvent,
+    RequireUserConfirmEvent,
+    ToolResultEndEvent,
+    UserConfirmResultEvent,
+)
 from agentscope.message import Msg, TextBlock
 
 from server import config
@@ -28,8 +33,14 @@ from server.schemas.chat import (
     UpdateTaskRequest,
     WorkspaceOut,
 )
-from server.service.events import AgentEventTranslator, sse_frame
-from server.service.history import agent_state_to_chat_messages
+from server.service.events import (
+    AgentEventTranslator,
+    final_todos_changed_frame,
+    sse_frame,
+    task_todos_changed_frame,
+    todo_changed_after_tool,
+)
+from server.service.history import agent_state_to_chat_messages, serialize_todos
 from server.service.memory_store import agent_state_store
 from server.service.task_manager import task_manager
 from server.service.title_generator import generate_title
@@ -127,6 +138,22 @@ async def get_task_messages(task_id: str) -> dict:
     return {"messages": agent_state_to_chat_messages(state)}
 
 
+@app.get("/api/tasks/{task_id}/todos")
+async def get_task_todos(task_id: str) -> dict:
+    """Return the current snapshot of the agent's internal todo list.
+
+    Reads `AgentState.tasks_context.tasks` — the tasks the agent created
+    or updated during its run via `TaskCreate`/`TaskUpdate`. The frontend
+    hits this on cold task-switch or page reload. When no agent state
+    exists (the task is new and untouched), returns an empty list rather
+    than 404.
+    """
+    if task_manager.get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    state = await agent_state_store.load(task_id)
+    return {"todos": serialize_todos(state)}
+
+
 @app.post("/api/chat")
 async def chat(payload: ChatRequest) -> StreamingResponse:
     task = task_manager.get_task(payload.task_id)
@@ -179,8 +206,33 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                             yield frame
                         break
 
+                    # Translate the event into SSE frames. Tools that
+                    # ended during this iteration get their buffer
+                    # popped by the translator; we capture the tool name
+                    # before/after to decide whether to send a fresh
+                    # `task_todos_changed` snapshot.
+                    tool_name_after: str | None = None
+                    if isinstance(event, ToolResultEndEvent):
+                        # Peek at the buffer the translator is about to pop.
+                        buf = translator._buffers.get(event.tool_call_id)
+                        tool_name_after = buf.tool_name if buf else None
+
                     for frame in translator.translate(event):
                         yield frame
+
+                    if isinstance(event, ToolResultEndEvent):
+                        # The translator's buffer has been popped during
+                        # `translate`. Re-serialise the todo list and emit
+                        # a snapshot when the just-finished tool was a
+                        # todo mutator.
+                        todos_now = serialize_todos(agent.state)
+                        todo_frames = todo_changed_after_tool(
+                            tool_name_after or "",
+                            todos_now,
+                        )
+                        if todo_frames is not None:
+                            for frame in todo_frames:
+                                yield frame
 
                     if isinstance(event, ReplyEndEvent):
                         for frame in _new_artifact_frames(
@@ -188,6 +240,11 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                             turn_started_at,
                         ):
                             yield frame
+                        # Always send one final todo snapshot so the
+                        # client converges even when no todo tool ran.
+                        yield final_todos_changed_frame(
+                            serialize_todos(agent.state),
+                        )
                         await task_manager.save_agent_state(payload.task_id)
                         return
 

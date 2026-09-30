@@ -16,6 +16,7 @@ import { apiClient } from '@/api/client'
 import { parseSseFrame } from '@/api/events'
 import { mockTurn } from '@/mock/sse-server'
 import { useSessionStore } from '@/store/session'
+import { useTodosStore } from '@/store/todos'
 import { useWorkspaceStore } from '@/store/workspaces'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
@@ -23,6 +24,7 @@ const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 export function useChat() {
   const session = useSessionStore()
   const workspace = useWorkspaceStore()
+  const todos = useTodosStore()
   const abortController = ref<AbortController | null>(null)
 
   /**
@@ -94,7 +96,11 @@ export function useChat() {
       const noWait = () => Promise.resolve()
       for await (const frame of mockTurn(message, noWait)) {
         const parsed = parseSseFrame(frame)
-        if (parsed) session.applyFrame(parsed)
+        if (parsed?.event === 'task_todos_changed') {
+          todos.applyFrame(parsed.data as never)
+        } else if (parsed) {
+          session.applyFrame(parsed)
+        }
       }
       return
     }
@@ -115,6 +121,10 @@ export function useChat() {
         // arrives, so no extra API round-trip is needed here.
         if (parsed.event === 'task_renamed') {
           workspace.renameTask(taskId, String(parsed.data.title))
+          continue
+        }
+        if (parsed.event === 'task_todos_changed') {
+          todos.applyFrame(parsed.data as never)
           continue
         }
         session.applyFrame(parsed as never)

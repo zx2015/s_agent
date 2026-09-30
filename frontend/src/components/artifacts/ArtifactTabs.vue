@@ -13,13 +13,14 @@
 </template>
 
 <script setup lang="ts">
-export type ArtifactTabId = 'preview' | 'files' | 'diff' | 'download'
+export type ArtifactTabId = 'preview' | 'todos' | 'files' | 'diff' | 'download'
 
 defineProps<{ activeTab: ArtifactTabId }>()
 const emit = defineEmits<{ 'update:activeTab': [tab: ArtifactTabId] }>()
 
 const tabs: Array<{ id: ArtifactTabId; label: string }> = [
   { id: 'preview', label: '产物预览' },
+  { id: 'todos', label: '待办' },
   { id: 'files', label: '全部文件' },
   { id: 'diff', label: '文件变更' },
   { id: 'download', label: '下载' },

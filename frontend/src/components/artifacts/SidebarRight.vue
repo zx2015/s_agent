@@ -4,6 +4,7 @@
 
     <div class="pane-body">
       <PreviewPane v-if="activeTab === 'preview'" :artifact="activeArtifact" />
+      <TodoPanel v-else-if="activeTab === 'todos'" />
       <FileTreePane v-else-if="activeTab === 'files'" :task-id="taskId" />
       <DiffPane v-else-if="activeTab === 'diff'" :task-id="taskId" />
       <DownloadPane v-else :task-id="taskId" />
@@ -16,6 +17,7 @@ import { computed, ref, watch } from 'vue'
 import { McLayoutAside } from '@matechat/core'
 import ArtifactTabs, { type ArtifactTabId } from './ArtifactTabs.vue'
 import PreviewPane from './PreviewPane.vue'
+import TodoPanel from './TodoPanel.vue'
 import FileTreePane from './FileTreePane.vue'
 import DiffPane from './DiffPane.vue'
 import DownloadPane from './DownloadPane.vue'

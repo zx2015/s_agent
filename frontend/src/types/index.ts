@@ -54,3 +54,22 @@ export interface ModelSettings {
   modelName: string
   baseUrl: string
 }
+
+export type TodoState = 'pending' | 'in_progress' | 'completed' | 'deleted'
+
+/**
+ * Mirror of `server/service/history.py::serialize_todos`. The backend
+ * owns the truth (the agent's `AgentState.tasks_context.tasks`); the
+ * frontend re-receives the full list on every `task_todos_changed`
+ * SSE frame and replaces its local copy wholesale.
+ */
+export interface TodoItem {
+  id: string
+  subject: string
+  description: string
+  state: TodoState
+  owner: string | null
+  blocks: string[]
+  blockedBy: string[]
+  createdAt: string
+}

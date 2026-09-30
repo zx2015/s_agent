@@ -14,6 +14,7 @@ export const EVENT_NAMES = [
   'artifact_created',
   'require_confirm',
   'task_renamed',
+  'task_todos_changed',
   'done',
 ] as const
 
@@ -66,6 +67,29 @@ export interface TaskRenamedData {
 
 export interface DoneData {
   task_status: string
+}
+
+/**
+ * A snapshot of the agent's internal todo list. See
+ * `docs/specs/2026-09-28-todo-display.md` for the wire shape; the
+ * backend emits one of these on every TaskCreate / TaskUpdate, plus one
+ * unconditional snapshot at the end of every turn. The frontend treats
+ * the payload as authoritative — it overwrites the previous list
+ * rather than diffing.
+ */
+export interface TodoItem {
+  id: string
+  subject: string
+  description: string
+  state: 'pending' | 'in_progress' | 'completed' | 'deleted'
+  owner: string | null
+  blocks: string[]
+  blockedBy: string[]
+  createdAt: string
+}
+
+export interface TaskTodosChangedData {
+  todos: TodoItem[]
 }
 
 export interface ParsedFrame {

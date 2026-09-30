@@ -4,6 +4,7 @@ Verifies `server/service/events.py` produces frames matching the wire
 contract in `frontend/src/api/events.ts` (event names + JSON keys).
 """
 import json
+import pytest
 
 from agentscope.event import (
     ReplyEndEvent,
@@ -18,7 +19,12 @@ from agentscope.event import (
 from agentscope.message import ToolCallBlock, ToolResultState
 from agentscope.types import ErrorInfo
 
-from server.service.events import AgentEventTranslator
+from server.service.events import (
+    EVENT_NAMES,
+    AgentEventTranslator,
+    sse_frame,
+    task_todos_changed_frame,
+)
 
 
 def _parse_one(frames: list[str]) -> tuple[str, dict]:
@@ -140,3 +146,27 @@ def test_reply_end_frame_reports_completed_and_failed():
         ),
     )
     assert (event, data) == ("done", {"task_status": "failed"})
+
+
+def test_task_todos_changed_frame():
+    todos = [
+        {
+            "id": "1",
+            "subject": "读取配置",
+            "description": "desc",
+            "state": "pending",
+            "owner": None,
+            "blocks": [],
+            "blockedBy": [],
+            "createdAt": "2026-09-30T10:00:00Z",
+        }
+    ]
+    frame = task_todos_changed_frame(todos)
+    event, data = _parse_one([frame])
+    assert event == "task_todos_changed"
+    assert data == {"todos": todos}
+
+
+def test_sse_frame_rejects_unknown_event():
+    with pytest.raises(ValueError, match="Unknown SSE event"):
+        sse_frame("unknown_event_type", {})

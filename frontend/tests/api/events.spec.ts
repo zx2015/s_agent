@@ -15,6 +15,7 @@ describe('SSE contract', () => {
         'done',
         'require_confirm',
         'task_renamed',
+        'task_todos_changed',
         'text_delta',
         'thinking_delta',
         'tool_call_end',
@@ -37,6 +38,46 @@ describe('SSE contract', () => {
     const parsed = parseSseFrame(frame)
     expect(parsed.event).toBe('tool_call_start')
     expect(parsed.data.tool).toBe('calculate')
+  })
+
+  it('parses a task_todos_changed frame with full todo items', () => {
+    const payload = {
+      todos: [
+        {
+          id: '1',
+          subject: '读取配置',
+          description: '',
+          state: 'completed',
+          owner: 'explorer',
+          blocks: ['2'],
+          blockedBy: [],
+          createdAt: '2026-09-30T10:00:00Z',
+        },
+        {
+          id: '2',
+          subject: '解析配置',
+          description: '',
+          state: 'in_progress',
+          owner: null,
+          blocks: [],
+          blockedBy: ['1'],
+          createdAt: '2026-09-30T10:00:01Z',
+        },
+      ],
+    }
+    const frame = `event: task_todos_changed\ndata: ${JSON.stringify(payload)}\n\n`
+    const parsed = parseSseFrame(frame)
+    expect(parsed?.event).toBe('task_todos_changed')
+    expect(parsed?.data.todos).toHaveLength(2)
+    expect(parsed?.data.todos[0].state).toBe('completed')
+    expect(parsed?.data.todos[1].blockedBy).toEqual(['1'])
+  })
+
+  it('parses an empty task_todos_changed frame as an empty list', () => {
+    const frame = 'event: task_todos_changed\ndata: {"todos":[]}\n\n'
+    const parsed = parseSseFrame(frame)
+    expect(parsed?.event).toBe('task_todos_changed')
+    expect(parsed?.data.todos).toEqual([])
   })
 
   it('returns null for an unknown event name', () => {
