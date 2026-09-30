@@ -11,26 +11,31 @@
         <span class="group-count">{{ workspace.tasks.length }}</span>
       </header>
 
-      <ul v-show="!isCollapsed(workspace.id)" class="task-list">
-        <li
-          v-for="task in workspace.tasks"
-          :key="task.id"
-          class="task-item"
-          :class="[`status-${task.status}`, { active: task.id === store.activeTaskId }]"
-          :data-test="`task-${task.id}`"
-          @click="store.selectTask(task.id)"
-        >
-          <span class="status-dot" :title="task.status" />
-          <span class="task-title">{{ task.title }}</span>
-          <span
-            v-if="task.hasArtifacts"
-            class="artifact-badge"
-            :data-test="`artifact-badge-${task.id}`"
-            title="有产物"
-            >◈</span
+      <McList
+        v-show="!isCollapsed(workspace.id)"
+        class="task-list"
+        :variant="ListVariant.Transparent"
+        :data="toListItems(workspace.tasks)"
+        @select="(item) => store.selectTask(String(item.value))"
+      >
+        <template #item="{ item }">
+          <div
+            class="task-item"
+            :class="[`status-${item.status}`, { active: item.active }]"
+            :data-test="`task-${item.value}`"
           >
-        </li>
-      </ul>
+            <span class="status-dot" :title="item.status" />
+            <span class="task-title">{{ item.label }}</span>
+            <span
+              v-if="item.hasArtifacts"
+              class="artifact-badge"
+              :data-test="`artifact-badge-${item.value}`"
+              title="有产物"
+              >◈</span
+            >
+          </div>
+        </template>
+      </McList>
     </section>
 
     <p v-if="store.filteredWorkspaces.length === 0" class="empty">
@@ -41,10 +46,32 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { McList } from '@matechat/core'
+import { ListVariant } from '@matechat/core/List'
 import { useWorkspaceStore } from '@/store/workspaces'
+import type { Task } from '@/types'
 
 const store = useWorkspaceStore()
 const collapsed = ref<Set<string>>(new Set())
+
+/** McList's ListItemData, extended with the task fields the `#item` slot needs. */
+interface TaskListItem {
+  label: string
+  value: string
+  active: boolean
+  status: Task['status']
+  hasArtifacts: boolean
+}
+
+function toListItems(tasks: Task[]): TaskListItem[] {
+  return tasks.map((task) => ({
+    label: task.title,
+    value: task.id,
+    active: task.id === store.activeTaskId,
+    status: task.status,
+    hasArtifacts: task.hasArtifacts,
+  }))
+}
 
 function isCollapsed(workspaceId: string): boolean {
   return collapsed.value.has(workspaceId)
@@ -91,12 +118,6 @@ function toggle(workspaceId: string): void {
 
 .group-count {
   font-size: 11px;
-}
-
-.task-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
 }
 
 .task-item {

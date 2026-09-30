@@ -1,5 +1,5 @@
 <template>
-  <aside class="sidebar-right">
+  <McLayoutAside class="sidebar-right">
     <ArtifactTabs v-model:active-tab="activeTab" />
 
     <div class="pane-body">
@@ -8,11 +8,12 @@
       <DiffPane v-else-if="activeTab === 'diff'" :task-id="taskId" />
       <DownloadPane v-else :task-id="taskId" />
     </div>
-  </aside>
+  </McLayoutAside>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { McLayoutAside } from '@matechat/core'
 import ArtifactTabs, { type ArtifactTabId } from './ArtifactTabs.vue'
 import PreviewPane from './PreviewPane.vue'
 import FileTreePane from './FileTreePane.vue'
@@ -31,10 +32,12 @@ const activeArtifact = computed(() => session.artifacts[0] ?? null)
 </script>
 
 <style scoped>
+/* See SidebarLeft.vue for why this overrides McLayoutAside's default
+   `flex-direction: row`. */
 .sidebar-right {
   height: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: column !important;
   border-left: 1px solid var(--color-border);
   background: #fff;
   min-width: 0;

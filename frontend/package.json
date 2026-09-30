@@ -13,8 +13,6 @@
   "dependencies": {
     "@devui-design/icons": "^1.4.0",
     "@matechat/core": "^1.14.0",
-    "highlight.js": "^11.12.0",
-    "markdown-it": "^15.0.2",
     "pinia": "^4.0.3",
     "splitpanes": "^4.1.2",
     "vue": "^3.5.42",
@@ -22,7 +20,6 @@
     "vue-diff": "^1.2.4"
   },
   "devDependencies": {
-    "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/test-utils": "^2.5.1",

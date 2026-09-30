@@ -11,40 +11,31 @@
       :key="call.callId"
       :call="call"
     />
-    <div
-      v-if="message.text"
-      class="assistant-text"
-      data-test="assistant-text"
-      v-html="renderedText"
-    />
+    <div v-if="message.text" class="assistant-text" data-test="assistant-text">
+      <McMarkdownCard :content="message.text" />
+    </div>
     <span v-if="message.streaming && message.text" class="cursor" />
+
+    <!-- Copy is the only action with real, self-contained behavior
+         (McCopyIcon writes `text` to the clipboard itself) — shown once
+         the answer has actually finished, so there's nothing to copy
+         mid-stream. -->
+    <McToolbar
+      v-if="!message.streaming && message.text"
+      class="assistant-toolbar"
+      :items="[{ key: 'copy', icon: ToolbarAction.COPY, text: message.text, label: '复制' }]"
+    />
   </McBubble>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js'
-import { McBubble } from '@matechat/core'
+import { McBubble, McMarkdownCard, McToolbar } from '@matechat/core'
+import { ToolbarAction } from '@matechat/core/Toolbar'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallCard from './ToolCallCard.vue'
 import type { ChatMessage } from '@/types'
 
-const props = defineProps<{ message: ChatMessage }>()
-
-const md = new MarkdownIt({
-  html: false, // agent output is untrusted; never allow raw HTML
-  linkify: true,
-  breaks: true,
-  highlight(code, language) {
-    if (language && hljs.getLanguage(language)) {
-      return hljs.highlight(code, { language }).value
-    }
-    return ''
-  },
-})
-
-const renderedText = computed(() => md.render(props.message.text))
+defineProps<{ message: ChatMessage }>()
 </script>
 
 <style scoped>
@@ -55,7 +46,7 @@ const renderedText = computed(() => md.render(props.message.text))
 .assistant-bubble :deep(.mc-bubble-content) {
   font-size: 14px;
   line-height: 1.7;
-  color: #1d2129;
+  color: var(--color-text);
 }
 
 .assistant-text :deep(pre) {
@@ -68,6 +59,15 @@ const renderedText = computed(() => md.render(props.message.text))
 .assistant-text :deep(code) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+}
+
+.assistant-toolbar {
+  margin-top: 4px;
+  opacity: 0.6;
+}
+
+.assistant-toolbar:hover {
+  opacity: 1;
 }
 
 .cursor {

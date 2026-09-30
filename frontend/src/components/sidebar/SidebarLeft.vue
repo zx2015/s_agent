@@ -1,5 +1,5 @@
 <template>
-  <aside class="sidebar-left">
+  <McLayoutAside class="sidebar-left">
     <header class="sidebar-header">
       <button class="new-task" @click="createTask">+ 新建任务</button>
       <input
@@ -19,11 +19,12 @@
         <span class="settings-icon">⚙</span>
       </button>
     </footer>
-  </aside>
+  </McLayoutAside>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { McLayoutAside } from '@matechat/core'
 import WorkspaceTree from './WorkspaceTree.vue'
 import { useWorkspaceStore } from '@/store/workspaces'
 import { useSettingsStore } from '@/store/settings'
@@ -45,10 +46,18 @@ async function createTask(): Promise<void> {
 </script>
 
 <style scoped>
+/*
+ * McLayoutAside's own CSS (@matechat/core/Layout/index.css) sets
+ * `flex-direction: row`, meant for asides that lay out a row of icons.
+ * Our sidebar is a vertical stack (header / tree / footer), which is a
+ * legitimately different use of the same semantic wrapper — the
+ * `!important` documents that this is a deliberate override, not an
+ * accidental specificity fight.
+ */
 .sidebar-left {
   height: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: column !important;
   border-right: 1px solid var(--color-border);
   background: #fff;
 }

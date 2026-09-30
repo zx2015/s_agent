@@ -3,7 +3,7 @@
 > 本文件随代码纳入版本控制。完成事项移至"已完成"并标注日期，严禁直接删除。
 
 ## 进行中
-- [ ] 用真实 `LITELLM_API_KEY` 跑通一次端到端真实对话（当前环境无可用 key，仅验证了优雅降级路径）— 优先级：高
+- （无）
 
 ## 待办
 - [ ] 实现四大记忆机制：上下文注入 / 压缩 / 卸载 / 长期记忆 — 优先级：高（阶段一 spec 模块 D）
@@ -38,4 +38,18 @@
 - [x] 前后端联调收尾：`store/workspaces.ts` 新增 `fetchWorkspaces`/`createTaskRemote` 走真实 REST；`App.vue` 挂载时拉取工作区；HITL 确认卡片改为通过 `useChat().confirmToolCall` 调用 `POST /api/tasks/{id}/confirm`（此前只清本地状态，未回传后端）— 2026-09-30
   - 前端 88 tests passed（新增 1 个），typecheck 干净，dev server 与 prod build 均验证通过
   - 后端 10 tests passed（calculator 4 个 + events 翻译器 6 个）；`/api/chat` 在无 `LITELLM_API_KEY` 时验证了优雅降级（SSE 内返回错误帧而非 500）
+- [x] 用真实 `LITELLM_API_KEY` 跑通端到端真实对话，并修复两个真实 bug — 2026-09-30
+  - calculate 工具默认会弹 HITL 确认（AgentScope 对无显式权限声明的 `FunctionTool` 安全默认值），已显式声明 `PermissionDecision(ALLOW)`
+  - calculate 返回 `ToolResponse`（错误类型）导致 `FunctionTool` 适配器把整个对象 repr 塞进结果文本；改为直接返回 `str`
+  - 修复"发消息没反应"：`useChat.send()` 之前要求先手动选中任务，无任务时静默返回；新增 `ensureActiveTask()` 自动建任务
+  - 字体可读性：`#86909c`/`#c9cdd4`（对比度 <3:1）统一替换为 `--color-text-muted: #57606a`（约 5:1）
+- [x] 更彻底地接入 MateChat：布局、Markdown 渲染、任务列表、空状态引导均改用官方组件而非仅气泡/输入框 — 2026-09-30
+  - `SidebarMiddle.vue`：`McLayout`/`McLayoutHeader`/`McLayoutContent`/`McLayoutSender`，`McLayoutContent` 内置的自动滚底（含用户上滑暂停 + 跳转箭头）替换了手写的 `watch()+scrollTop` 逻辑
+  - `SidebarLeft.vue`/`SidebarRight.vue`：`McLayoutAside`（覆盖其默认 `flex-direction:row`，因为我们是垂直侧栏，已加注释说明）
+  - `AssistantMessage.vue`：`McMarkdownCard` 替换手写 `markdown-it`+`highlight.js`（两个包已从 `package.json` 移除）；新增 `McToolbar` 复制按钮（`McCopyIcon` 自带剪贴板写入）
+  - `WorkspaceTree.vue`：`McList`（`variant="transparent"`，`#item` 插槽保留原有状态点/产物徽标）承载每个工作区分组内的任务；分组折叠本身没有对应的 MateChat 组件，仍是自定义的
+  - `App.vue`：`McHeader`（`#operationArea` 插槽放当前任务名）
+  - `MessageList.vue` 空状态：`McIntroduction` + `McPrompt` 建议提示词，点击直接调用 `useChat().send()` 运行
+  - 新增 `frontend/tests/setup.ts` 全局 stub `ResizeObserver`（jsdom 未实现，`McLayoutContent` 无条件构造它）
+  - 前端 89 tests passed，typecheck 干净，prod build 验证通过
 

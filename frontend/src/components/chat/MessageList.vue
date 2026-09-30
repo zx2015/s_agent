@@ -1,12 +1,16 @@
 <template>
-  <div ref="scrollArea" class="message-list">
-    <p
+  <div class="message-list">
+    <McIntroduction
       v-if="store.messages.length === 0"
       data-test="empty-state"
-      class="empty-state"
+      title="MateChat 工作台"
+      sub-title="描述你想完成的任务，Agent 会规划步骤并执行"
+      :description="[
+        '可以读写文件、执行命令、生成网页，也能做精确计算',
+      ]"
     >
-      描述你想完成的任务，Agent 会规划步骤并执行。
-    </p>
+      <McPrompt :list="suggestions" @item-click="onSuggestionClick" />
+    </McIntroduction>
 
     <template v-for="message in store.messages" :key="message.id">
       <UserMessage v-if="message.role === 'user'" :text="message.text" />
@@ -23,47 +27,40 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { McIntroduction, McPrompt } from '@matechat/core'
 import UserMessage from './UserMessage.vue'
 import AssistantMessage from './AssistantMessage.vue'
 import HitlConfirmCard from './HitlConfirmCard.vue'
 import { useSessionStore } from '@/store/session'
 import { useChat } from '@/composables/useChat'
 
-const { confirmToolCall } = useChat()
+const { confirmToolCall, send } = useChat()
 
 const store = useSessionStore()
-const scrollArea = ref<HTMLElement | null>(null)
 
-// Follow the stream: without this the newest tokens render below the fold
-// and the user has to chase the output with the scrollbar.
-watch(
-  () => [
-    store.messages.length,
-    store.messages[store.messages.length - 1]?.text,
-    store.pendingConfirm,
-  ],
-  async () => {
-    await nextTick()
-    if (scrollArea.value) {
-      scrollArea.value.scrollTop = scrollArea.value.scrollHeight
-    }
-  },
-  { deep: true },
-)
+/** Shape of `McPrompt`'s `list` prop items (@matechat/core/Prompt). */
+interface PromptItem {
+  value: string | number
+  label: string
+}
+
+// Onboarding shortcuts mirroring the tool capabilities described in the
+// backend's system prompt (server/agent/core.py) — clicking one runs it
+// immediately rather than just filling the input, since these are meant
+// to demonstrate the agent working, not just show example phrasing.
+const suggestions: PromptItem[] = [
+  { value: 'html-page', label: '写一个个人主页的 HTML 页面' },
+  { value: 'calc', label: '帮我算一下 (153.2 - 100) / 100 * 100' },
+  { value: 'read-files', label: '看看当前工作区里有哪些文件' },
+]
+
+function onSuggestionClick(prompt: PromptItem): void {
+  send(prompt.label)
+}
 </script>
 
 <style scoped>
 .message-list {
-  flex: 1;
-  overflow-y: auto;
   padding: 16px 24px;
-}
-
-.empty-state {
-  text-align: center;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  margin-top: 48px;
 }
 </style>

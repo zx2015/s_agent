@@ -130,6 +130,68 @@ that span multiple files:
   REST JSON matches those UI types field-for-field with no translation
   layer needed on the frontend.
 
+## MateChat component usage (frontend/src)
+
+Beyond the `app.use(MateChat)` plugin install in `main.ts`, these
+`@matechat/core` components are wired into real app structure/behavior
+(not just installed-but-unused):
+
+- **Layout**: `SidebarMiddle.vue` uses `McLayout`/`McLayoutHeader`/
+  `McLayoutContent`/`McLayoutSender` for the header/messages/input stack;
+  `McLayoutContent`'s built-in `ResizeObserver`-driven auto-scroll-to-bottom
+  (with pause-on-scroll-up and jump arrows) replaced a hand-rolled
+  `watch()` + `scrollTop = scrollHeight` in `MessageList.vue`.
+  `SidebarLeft.vue`/`SidebarRight.vue` use `McLayoutAside` — its default
+  CSS sets `flex-direction: row` (meant for icon rows), which both
+  components override to `column !important` with a comment explaining
+  why, since our sidebars are vertical stacks.
+- **Chat surface**: `UserMessage.vue`/`AssistantMessage.vue` use
+  `McBubble`; `ChatInput.vue` uses `McInput` (its `loading` prop drives
+  the send-button↔cancel-button swap instead of a custom disabled state).
+- **Markdown**: `AssistantMessage.vue` renders `message.text` with
+  `McMarkdownCard` instead of a hand-rolled `markdown-it` +
+  `highlight.js` pipeline (both removed from `package.json` — see
+  `MarkdownCard/index.css` for the bundled `hljs-*` theme that made our
+  own `highlight.js/styles/github.css` import redundant). `<think>` tag
+  stripping still happens in `store/session.ts` (a real, already-tested
+  quirk from a specific model provider in the `v-flash` rotation), not
+  via `McMarkdownCard`'s `enableThink` — that prop only parses tags found
+  inline in `content`, not the separate `thinking_delta` SSE channel,
+  so the two rendering paths (event-based vs. inline-tag) would otherwise
+  disagree on where "thinking" content shows up.
+- **Actions**: `AssistantMessage.vue` shows an `McToolbar` with only a
+  `copy` action (`ToolbarAction.COPY`, from `@matechat/core/Toolbar`) once
+  a reply finishes — `McCopyIcon` handles the clipboard write itself via
+  the `text` field on the action item; no other toolbar action (like/
+  dislike/refresh/share) is wired up because none has real backend
+  behavior yet, and a decorative button that does nothing is worse than
+  no button.
+- **Task list**: `WorkspaceTree.vue` renders each workspace's tasks with
+  `McList` (`variant="none"` was considered and rejected — it skips
+  McList's own click/active-state wiring entirely, which would make using
+  the component pointless; `variant="transparent"` is used instead, with
+  the existing status-dot/title/artifact-badge markup living inside the
+  `#item` slot). The collapsible per-workspace *grouping* has no MateChat
+  equivalent, so that part is still custom.
+- **Top bar**: `App.vue` uses `McHeader` with the active task name in its
+  `#operationArea` slot.
+- **Onboarding**: `MessageList.vue`'s empty state uses `McIntroduction`
+  with `McPrompt` suggestion chips; clicking one calls `useChat().send()`
+  directly (runs the example immediately, rather than just filling the
+  input) — see the chips' list in that file for what the agent can
+  actually do today.
+- **jsdom gap**: `McLayoutContent` constructs a real `ResizeObserver` in
+  `setup()` unconditionally. jsdom doesn't implement one, so
+  `frontend/tests/setup.ts` (wired via `vite.config.ts`'s
+  `test.setupFiles`) stubs a no-op `ResizeObserver` globally — any test
+  that mounts something nesting `McLayoutContent` needs this to not throw
+  before a single assertion runs.
+
+Not adopted, deliberately: `McAttachment`/`McFileList`/`McMention` (no
+attachment-upload backend exists yet — spec explicitly defers this) and
+`McRefreshIcon`/`McLikeIcon`/`McDislikeIcon` (would need real regenerate/
+feedback endpoints to not be decorative).
+
 ## Key conventions
 
 - Two-space indent, no semicolons in frontend `.ts`/`.vue` files; match
