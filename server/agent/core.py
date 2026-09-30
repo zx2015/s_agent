@@ -12,6 +12,8 @@ itself (`agentscope.tool.{Bash,Read,Write,Edit,Glob,Grep,TaskCreate,
 TaskGet,TaskList,TaskUpdate,AskUser}`) — nothing to reimplement there.
 Only the calculator is project-specific.
 """
+import os
+import platform
 from pathlib import Path
 
 from agentscope.agent import Agent
@@ -53,8 +55,65 @@ SYSTEM_PROMPT_TEMPLATE = (
     "所有文件读写、Bash 命令都必须在这个目录（或其子目录）下进行，"
     "文件工具要求绝对路径时，请以该目录为前缀拼接。生成的网页、Markdown、"
     "图片等产物请写入工作区根目录，以便用户在右侧预览。任何超过两个数字的"
-    "算术运算，必须调用 calculate 工具，禁止自己心算得出数字结果。"
+    "算术运算，必须调用 calculate 工具，禁止自己心算得出数字结果。\n\n"
+    "除工具调用外，你输出的所有文本都会在工作台的对话气泡中以 GitHub 风格 "
+    "Markdown（GFM）渲染后展示给用户，请照此排版——代码块标注语言、用表格"
+    "呈现结构化数据、用列表整理步骤等。\n\n"
+    "工具在用户当前选择的权限模式下运行；如果一次工具调用被拒绝，代表用户"
+    "主动拒绝了该操作，而不是执行出错——请调整思路或更换方案，向用户说明被"
+    "拒绝操作的影响以及其他可行方案，不要在没有新信息的情况下直接重试同一个"
+    "命令。\n\n"
+    "对话消息与工具结果中出现的 <system-reminder> 标签，是运行框架自动注入"
+    "的运行时提示（例如当前时间、待办任务状态等），并非用户本人发出的内容。"
+    "如果配置了工具中间件（middleware），它可能会拦截、修改甚至否决工具调"
+    "用；请将中间件返回的结果当作对你本次操作意图的反馈来处理，而不是当作"
+    "用户发来的新指令。\n\n"
+    "{environment_block}"
 )
+
+
+def _detect_shell() -> str:
+    """Resolve the shell AgentScope's `Bash` tool actually invokes commands
+    with.
+
+    Despite the tool's name, it never runs `bash` directly — it wraps every
+    command in `["/bin/sh", "-c", command]` (see
+    `agentscope/tool/_builtin/_bash.py`). On many Linux distros `/bin/sh` is
+    a symlink to `dash`, not `bash`, so resolving the actual symlink target
+    is the only way to report this honestly instead of assuming.
+    """
+    sh_path = Path("/bin/sh")
+    if sh_path.is_symlink():
+        return Path(os.readlink(sh_path)).name
+    return sh_path.name if sh_path.exists() else "sh"
+
+
+def _detect_platform() -> str:
+    system = platform.system()
+    if system == "Darwin":
+        return "macos"
+    if system == "Linux":
+        return "linux"
+    return system.lower()
+
+
+def _build_environment_block(workspace_dir: Path) -> str:
+    """Describe the actual host/task environment, detected at agent-build
+    time rather than hardcoded, so it stays correct if the backend ever
+    runs somewhere other than this one Linux box.
+    """
+    is_git_repo = (workspace_dir / ".git").is_dir()
+    lines = [
+        "<env>",
+        f"Working directory: {workspace_dir}",
+        f"Is directory a git repo: {'Yes' if is_git_repo else 'No'}",
+        f"Platform: {_detect_platform()}",
+        f"Shell: {_detect_shell()}",
+        f"OS Version: {platform.system()} {platform.release()}",
+        f"Model: {config.MODEL_NAME}",
+        "</env>",
+    ]
+    return "\n".join(lines)
 
 
 async def build_agent(workspace_dir: Path) -> Agent:
@@ -114,7 +173,10 @@ async def build_agent(workspace_dir: Path) -> Agent:
 
     return Agent(
         name="Assistant",
-        system_prompt=SYSTEM_PROMPT_TEMPLATE.format(workspace_dir=resolved_dir),
+        system_prompt=SYSTEM_PROMPT_TEMPLATE.format(
+            workspace_dir=resolved_dir,
+            environment_block=_build_environment_block(workspace_dir),
+        ),
         model=model,
         toolkit=toolkit,
     )
