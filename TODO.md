@@ -81,3 +81,10 @@
   - 移除了独立的、依赖 `window.prompt` 的"新建工作区"按钮（`icon-add-directory`），其能力已经并入上面的面板；`WorkspaceTree.vue` 每个工作区分组上那个悬停可见的"+"（在已展开的某个具体工作区里快速建任务）保留不变，两者不冲突
   - 真实端到端验证（Playwright 操作真实 Chromium，非单元测试 mock）：打开面板 → 填标题 → 下拉选"+新建文件夹" → 填新文件夹名 → 确认按钮从禁用变可点 → 点击 → 面板关闭 → 侧边栏里新文件夹和任务都正确出现
   - 前端测试：重写 `tests/components/SidebarLeft.spec.ts`（6 个，覆盖面板开关/选已有工作区建任务/自定义标题/新建文件夹+建任务两步请求/确认按钮禁用态/取消不发请求）；共 103 个测试全部通过，typecheck 干净，prod build 验证通过
+- [x] 新增"删除工作区"功能 + 文件夹选择器改为可视化文件浏览风格 — 2026-09-30
+  - 明确设计前提：本项目里的"工作区/文件夹"是后端的逻辑分组（`registry.json` 里的一条记录 + 磁盘上一个目录），不是用户桌面上的真实路径，所以"文件浏览器窗口选文件夹"不能也不应该做成调用 OS 原生文件对话框——而是在应用内做一个视觉上是文件浏览器（文件夹图标 + 可点击行 + 选中态高亮）、语义上仍是"选/建一个逻辑工作区"的选择器
+  - 后端：`TaskManager.delete_workspace(workspace_id)` 复用已有的 `delete_task()` 逐个清理该工作区下的每个任务（元数据/内存 Agent/Redis 状态/磁盘目录一样不少），再移除工作区记录本身并落盘；`DELETE /api/workspaces/{workspace_id}` 路由，工作区不存在返回 404
+  - 前端删除入口：`WorkspaceTree.vue` 每个工作区分组 header 悬停显示 `McDeleteIcon` 删除按钮（`@click.stop` 避免连带触发分组折叠/选中），点击弹 `window.confirm`，文案里带上该工作区当前任务数（前端本地就有这份数据，不必额外请求后端），确认后调用新增的 `workspaceStore.deleteWorkspaceRemote()`；若被删工作区里含有当前打开的任务，同步 `sessionStore.reset()`
+  - 文件夹选择器重做：`SidebarLeft.vue` 创建任务面板里原来的原生 `<select>` 换成 `.folder-picker`——一个可滚动的行列表，每行是 `icon-folder` 图标 + 工作区名，点击行即选中（高亮），列表末尾"新建文件夹…"行用 `icon-folder-new` 图标，选中后展开新文件夹名输入框（沿用原逻辑）；用 Playwright 截图确认了视觉效果（文件夹图标 + 选中高亮清晰可辨）
+  - 真实端到端验证：curl 直接建工作区+任务→ `DELETE /api/workspaces/{id}` → 确认工作区和其任务都从 `GET /api/workspaces` 里消失；Playwright 驱动真实 Chromium 走完整链路（面板建新文件夹+任务 → 侧边栏可见 → 悬停分组显示删除按钮 → 点击确认对话框 → 工作区连带任务从页面消失）
+  - 新增/更新测试：后端 `tests/test_task_manager.py`（+4 个，覆盖未知 id 返回 False / 级联删除任务与目录 / 不影响其他工作区 / 空工作区可正常删除）；前端 `store/workspaces.ts` 新增 `deleteWorkspaceRemote`（`tests/store/workspaces.spec.ts` +3 个）、`WorkspaceTree.vue` 新增删除按钮（`tests/components/WorkspaceTree.spec.ts` +3 个）、`SidebarLeft.vue` 文件夹选择器改版相应更新已有测试并新增 1 个专门验证行列表渲染/选中态的用例；后端测试 30→34，前端测试 103→110，typecheck 与 prod build 均验证通过

@@ -53,7 +53,7 @@ describe('SidebarLeft', () => {
     const { wrapper, store } = mountSidebar()
 
     await wrapper.find('.new-task').trigger('click')
-    await wrapper.find('[data-test="new-task-workspace"]').setValue('w2')
+    await wrapper.find('[data-test="folder-option-w2"]').trigger('click')
     await wrapper.find('[data-test="confirm-create"]').trigger('click')
     await flushPromises()
 
@@ -120,7 +120,7 @@ describe('SidebarLeft', () => {
     const { wrapper, store } = mountSidebar()
 
     await wrapper.find('.new-task').trigger('click')
-    await wrapper.find('[data-test="new-task-workspace"]').setValue('__new__')
+    await wrapper.find('[data-test="folder-option-new"]').trigger('click')
     await wrapper.find('[data-test="new-workspace-name"]').setValue('股票分析')
     await wrapper.find('[data-test="confirm-create"]').trigger('click')
     await flushPromises()
@@ -148,7 +148,7 @@ describe('SidebarLeft', () => {
     const { wrapper } = mountSidebar()
 
     await wrapper.find('.new-task').trigger('click')
-    await wrapper.find('[data-test="new-task-workspace"]').setValue('__new__')
+    await wrapper.find('[data-test="folder-option-new"]').trigger('click')
 
     expect(
       wrapper.find('[data-test="confirm-create"]').attributes('disabled'),
@@ -159,6 +159,32 @@ describe('SidebarLeft', () => {
     expect(
       wrapper.find('[data-test="confirm-create"]').attributes('disabled'),
     ).toBeUndefined()
+  })
+
+  it('renders the folder list as clickable rows instead of a native select, defaulting to the active task\'s folder', async () => {
+    const { wrapper } = mountSidebar()
+
+    await wrapper.find('.new-task').trigger('click')
+
+    expect(wrapper.find('select[data-test="new-task-workspace"]').exists()).toBe(
+      false,
+    )
+    expect(wrapper.find('[data-test="folder-option-default"]').exists()).toBe(
+      true,
+    )
+    expect(wrapper.find('[data-test="folder-option-w2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="folder-option-default"]').classes()).toContain(
+      'selected',
+    )
+
+    await wrapper.find('[data-test="folder-option-w2"]').trigger('click')
+
+    expect(wrapper.find('[data-test="folder-option-w2"]').classes()).toContain(
+      'selected',
+    )
+    expect(
+      wrapper.find('[data-test="folder-option-default"]').classes(),
+    ).not.toContain('selected')
   })
 
   it('closes the panel without creating anything on cancel', async () => {

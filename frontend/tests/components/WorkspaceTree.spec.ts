@@ -187,6 +187,58 @@ describe('WorkspaceTree', () => {
     // The original task is still visible, i.e. the group did not collapse.
     expect(wrapper.text()).toContain('生成落地页')
   })
+
+  it('deletes a workspace and all its tasks after confirming, and resets the session if the active task was inside it', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }))
+    const { wrapper, store } = mountTree()
+    const session = useSessionStore()
+    store.selectTask('t1')
+    session.messages.push({
+      id: 'm1',
+      role: 'user',
+      text: '嗨',
+      thinking: '',
+      toolCalls: [],
+      streaming: false,
+    })
+
+    await wrapper.find('[data-test="delete-workspace-w1"]').trigger('click')
+    await flushPromises()
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('1 个对话'),
+    )
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/workspaces/w1',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+    expect(store.workspaces.find((ws) => ws.id === 'w1')).toBeUndefined()
+    expect(session.messages).toHaveLength(0)
+  })
+
+  it('does not call the backend when the delete-workspace confirmation is dismissed', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false))
+    vi.stubGlobal('fetch', vi.fn())
+    const { wrapper, store } = mountTree()
+
+    await wrapper.find('[data-test="delete-workspace-w1"]').trigger('click')
+    await flushPromises()
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(store.workspaces.find((ws) => ws.id === 'w1')).toBeDefined()
+  })
+
+  it("clicking a workspace's delete button does not also toggle its collapse state or select a task", async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false))
+    const { wrapper } = mountTree()
+
+    await wrapper.find('[data-test="delete-workspace-w1"]').trigger('click')
+
+    // The group is still expanded and untouched, i.e. the click was
+    // isolated to the delete action.
+    expect(wrapper.text()).toContain('生成落地页')
+  })
 })
 
 function flushPromises(): Promise<void> {

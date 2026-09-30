@@ -147,4 +147,43 @@ describe('workspace store', () => {
     expect(workspace).toEqual({ id: 'w-new', name: '新工作区', tasks: [] })
     expect(store.workspaces.map((w) => w.id)).toContain('w-new')
   })
+
+  it('deletes a workspace via the backend and removes it from the tree', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
+    )
+
+    await store.deleteWorkspaceRemote('w2')
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/workspaces/w2',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+    expect(store.workspaces.map((w) => w.id)).not.toContain('w2')
+  })
+
+  it('clears the active task selection when its workspace is deleted', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
+    )
+    store.selectTask('t3')
+
+    await store.deleteWorkspaceRemote('w2')
+
+    expect(store.activeTaskId).toBeNull()
+  })
+
+  it('leaves the active task selection untouched when a different workspace is deleted', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
+    )
+    store.selectTask('t1')
+
+    await store.deleteWorkspaceRemote('w2')
+
+    expect(store.activeTaskId).toBe('t1')
+  })
 })

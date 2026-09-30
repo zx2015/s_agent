@@ -15,19 +15,33 @@
           />
         </label>
 
-        <label class="field">
+        <div class="field">
           <span class="field-label">文件夹</span>
-          <select
-            v-model="selectedWorkspaceId"
-            class="field-input"
-            data-test="new-task-workspace"
-          >
-            <option v-for="ws in store.workspaces" :key="ws.id" :value="ws.id">
-              {{ ws.name }}
-            </option>
-            <option :value="NEW_WORKSPACE_OPTION">+ 新建文件夹…</option>
-          </select>
-        </label>
+          <div class="folder-picker" data-test="new-task-workspace">
+            <button
+              v-for="ws in store.workspaces"
+              :key="ws.id"
+              type="button"
+              class="folder-row"
+              :class="{ selected: selectedWorkspaceId === ws.id }"
+              :data-test="`folder-option-${ws.id}`"
+              @click="selectedWorkspaceId = ws.id"
+            >
+              <span class="icon-folder folder-icon" />
+              <span class="folder-name">{{ ws.name }}</span>
+            </button>
+            <button
+              type="button"
+              class="folder-row new-folder-row"
+              :class="{ selected: isCreatingNewWorkspace }"
+              data-test="folder-option-new"
+              @click="selectedWorkspaceId = NEW_WORKSPACE_OPTION"
+            >
+              <span class="icon-folder-new folder-icon" />
+              <span class="folder-name">新建文件夹…</span>
+            </button>
+          </div>
+        </div>
 
         <label v-if="isCreatingNewWorkspace" class="field">
           <span class="field-label">新文件夹名称</span>
@@ -217,6 +231,76 @@ async function confirmCreate(): Promise<void> {
   border-radius: 6px;
   font-size: 13px;
   background: #fff;
+}
+
+.folder-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px;
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  color: inherit;
+}
+
+.folder-row:hover {
+  background: var(--color-bg-subtle);
+}
+
+.folder-row.selected {
+  background: #e8f3ff;
+  color: #165dff;
+}
+
+.folder-icon {
+  flex-shrink: 0;
+  font-size: 15px;
+  color: #ffb02e;
+}
+
+.folder-row.selected .folder-icon {
+  color: #165dff;
+}
+
+.folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-folder-row {
+  border-top: 1px dashed var(--color-border);
+  margin-top: 2px;
+  padding-top: 8px;
+  color: var(--color-text-muted);
+}
+
+.new-folder-row .folder-icon {
+  color: var(--color-text-muted);
+}
+
+.new-folder-row.selected {
+  color: #165dff;
+}
+
+.new-folder-row.selected .folder-icon {
+  color: #165dff;
 }
 
 .panel-actions {

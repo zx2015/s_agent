@@ -109,3 +109,58 @@ def test_created_workspace_can_receive_tasks():
 
     listed = {w["id"]: w for w in manager.list_workspaces()}
     assert [t["id"] for t in listed[workspace.id]["tasks"]] == [task.id]
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_returns_false_for_an_unknown_workspace():
+    manager = TaskManager()
+    assert await manager.delete_workspace("does-not-exist") is False
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_cascades_to_every_task_inside_it():
+    manager = TaskManager()
+    workspace = manager.create_workspace("待整体删除的工作区")
+    task_a = manager.create_task(workspace.id, "任务A")
+    task_b = manager.create_task(workspace.id, "任务B")
+    workspace_dir_a = manager.workspace_dir(task_a.id)
+    workspace_dir_b = manager.workspace_dir(task_b.id)
+    assert workspace_dir_a.exists()
+    assert workspace_dir_b.exists()
+
+    deleted = await manager.delete_workspace(workspace.id)
+
+    assert deleted is True
+    assert manager.get_task(task_a.id) is None
+    assert manager.get_task(task_b.id) is None
+    assert not workspace_dir_a.exists()
+    assert not workspace_dir_b.exists()
+    workspace_ids = {w["id"] for w in manager.list_workspaces()}
+    assert workspace.id not in workspace_ids
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_leaves_other_workspaces_untouched():
+    manager = TaskManager()
+    workspace_to_delete = manager.create_workspace("要删的工作区")
+    workspace_to_keep = manager.create_workspace("要留的工作区")
+    manager.create_task(workspace_to_delete.id, "会被删掉的任务")
+    kept_task = manager.create_task(workspace_to_keep.id, "应该留下的任务")
+
+    await manager.delete_workspace(workspace_to_delete.id)
+
+    assert manager.get_task(kept_task.id) is not None
+    workspace_ids = {w["id"] for w in manager.list_workspaces()}
+    assert workspace_to_keep.id in workspace_ids
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_with_no_tasks_just_removes_the_workspace():
+    manager = TaskManager()
+    workspace = manager.create_workspace("空的待删工作区")
+
+    deleted = await manager.delete_workspace(workspace.id)
+
+    assert deleted is True
+    workspace_ids = {w["id"] for w in manager.list_workspaces()}
+    assert workspace.id not in workspace_ids

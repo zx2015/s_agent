@@ -64,6 +64,14 @@ async def create_workspace(payload: CreateWorkspaceRequest) -> dict:
     ).model_dump(by_alias=True)
 
 
+@app.delete("/api/workspaces/{workspace_id}")
+async def delete_workspace(workspace_id: str) -> dict:
+    deleted = await task_manager.delete_workspace(workspace_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    return {"ok": True}
+
+
 @app.post("/api/tasks")
 async def create_task(payload: CreateTaskRequest) -> dict:
     task = task_manager.create_task(payload.workspace_id, payload.title)

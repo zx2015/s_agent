@@ -182,6 +182,29 @@ class TaskManager:
         shutil.rmtree(self.workspace_dir(task_id), ignore_errors=True)
         return True
 
+    async def delete_workspace(self, workspace_id: str) -> bool:
+        """Delete a workspace and, cascading, every task inside it.
+
+        Mirrors deleting a folder on a real filesystem — its contents go
+        with it. Each task is removed through `delete_task` so it gets
+        the exact same cleanup (metadata, cached agent, Redis state,
+        workspace directory) rather than a shortcut that only handles
+        the workspace record itself. Returns `False` without touching
+        anything if the workspace doesn't exist.
+        """
+        if workspace_id not in self._workspaces:
+            return False
+
+        task_ids = [
+            t.id for t in self._tasks.values() if t.workspace_id == workspace_id
+        ]
+        for task_id in task_ids:
+            await self.delete_task(task_id)
+
+        del self._workspaces[workspace_id]
+        self._save()
+        return True
+
     # --- workspace directories ------------------------------------------------
 
     def workspace_dir(self, task_id: str) -> Path:

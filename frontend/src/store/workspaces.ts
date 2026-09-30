@@ -185,6 +185,24 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     return workspace
   }
 
+  /**
+   * Permanently delete a workspace and every task inside it (see
+   * `TaskManager.delete_workspace` — the backend cascades, mirroring
+   * deleting a folder on a real filesystem). Clears the active
+   * selection first if it pointed at a task that's about to disappear.
+   */
+  async function deleteWorkspaceRemote(workspaceId: string): Promise<void> {
+    const workspace = workspaces.value.find((item) => item.id === workspaceId)
+    if (workspace?.tasks.some((task) => task.id === activeTaskId.value)) {
+      activeTaskId.value = null
+    }
+    await apiClient.delete(`/api/workspaces/${workspaceId}`)
+    const index = workspaces.value.findIndex((item) => item.id === workspaceId)
+    if (index >= 0) {
+      workspaces.value.splice(index, 1)
+    }
+  }
+
   return {
     workspaces,
     searchQuery,
@@ -203,5 +221,6 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     createTaskRemote,
     deleteTaskRemote,
     createWorkspaceRemote,
+    deleteWorkspaceRemote,
   }
 })

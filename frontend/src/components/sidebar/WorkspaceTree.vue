@@ -17,6 +17,14 @@
         >
           <span class="icon-add" />
         </button>
+        <button
+          class="delete-workspace-button"
+          :data-test="`delete-workspace-${workspace.id}`"
+          title="删除工作区"
+          @click.stop="onDeleteWorkspaceClick(workspace.id, workspace.name, workspace.tasks.length)"
+        >
+          <McDeleteIcon :width="13" :height="13" />
+        </button>
       </header>
 
       <McList
@@ -134,6 +142,31 @@ async function onDeleteClick(taskId: string, title: string): Promise<void> {
   await store.deleteTaskRemote(taskId)
   if (wasActive) session.reset()
 }
+
+/**
+ * Deleting a workspace cascades to every task inside it on the backend
+ * (`TaskManager.delete_workspace`, mirroring deleting a folder on a real
+ * filesystem) — the confirm message spells out the task count up front
+ * so this doesn't read as "delete an empty folder" when it's actually
+ * about to take N conversations with it.
+ */
+async function onDeleteWorkspaceClick(
+  workspaceId: string,
+  name: string,
+  taskCount: number,
+): Promise<void> {
+  const message =
+    taskCount > 0
+      ? `确定要删除工作区"${name}"吗？里面的 ${taskCount} 个对话会一起被删除，此操作不可撤销。`
+      : `确定要删除工作区"${name}"吗？此操作不可撤销。`
+  if (!window.confirm(message)) return
+
+  const hadActiveTask = store.workspaces
+    .find((ws) => ws.id === workspaceId)
+    ?.tasks.some((task) => task.id === store.activeTaskId)
+  await store.deleteWorkspaceRemote(workspaceId)
+  if (hadActiveTask) session.reset()
+}
 </script>
 
 <style scoped>
@@ -191,6 +224,30 @@ async function onDeleteClick(taskId: string, title: string): Promise<void> {
 .add-task-button:hover {
   background: var(--color-bg-subtle);
   color: #165dff;
+}
+
+.delete-workspace-button {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.group-header:hover .delete-workspace-button {
+  display: flex;
+}
+
+.delete-workspace-button:hover {
+  background: #ffece8;
+  color: #f53f3f;
 }
 
 .task-item {
