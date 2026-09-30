@@ -14,6 +14,8 @@
 - [ ] 评估复用 `/media/data/git/股票分析/scripts/tencent_stock.py` 作为 Toolkit 工具 — 优先级：低（阶段二）
 - [ ] 设计 portfolio JSON 读写工具（遵守无引号规范）— 优先级：低（阶段二）
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
+- [ ] 优化标题生成延迟：当前 `main.py` 在 `agent.reply_stream` 开始前先 `await title_task`，导致 LiteLLM 响应慢时首字被阻塞 2~3 秒；应改在流式内部并发异步执行，完成后单独 yield `task_renamed` 帧 — 优先级：中（来自 review 建议）
+- [ ] 完善 `<system-reminder>` SSE 透传：AgentScope 自动插入的运行时提醒（HintBlockEvent）当前在 `events.py` 中被静默返回 `[]`，若需在前端呈现模型接收到的系统环境提示，可补充对应事件映射 — 优先级：低（来自 review 建议）
 - [ ] 修复"归档"按钮：`TaskHeaderBar.vue` 的归档目前只调用 `workspaceStore.archiveTask`，只在前端内存里隐藏任务，从没调用过后端——刷新页面（重新 `fetchWorkspaces`）后归档过的任务会原样出现。做"删除对话"功能时顺带发现，未修复（不在本次需求范围内）— 优先级：低
 
 ## 已完成
