@@ -75,3 +75,9 @@
   - 原来顶部"+ 新建任务"保持不变（仍是快速创建到第一个工作区的默认行为），新增的都是叠加能力，不影响老路径
   - 真实端到端验证：`POST /api/workspaces` 建"我的新项目" → 在该工作区 id 下建任务 → `GET /api/workspaces` 确认分组正确、任务归属正确
   - 新增/更新测试：后端 `tests/test_task_manager.py`（+3 个，覆盖 `create_workspace` 的 id 生成、空任务列表、可正常接收任务）；前端 `tests/store/workspaces.spec.ts`（+1）、`tests/components/WorkspaceTree.spec.ts`（+2）、新增 `tests/components/SidebarLeft.spec.ts`（3 个）；后端测试 27→30，前端测试 94→100，typecheck 与 prod build 均验证通过
+- [x] 修复"新建工作区"按钮"看起来没反应"的问题，改用内联面板代替 `window.prompt` — 2026-09-30
+  - 排查过程（用 Playwright + 真实 Chromium 实测，不是猜的）：`icon-add-directory` 图标本身渲染正常（字体、`::before` 内容都加载正确，截图确认是个文件夹+号图标）；点击后 `window.prompt` 确实弹出、确认后 `POST /api/workspaces` 确实发出、新工作区确实出现在列表里——功能链路是通的。但 `window.prompt`/`window.confirm` 这类原生对话框在真实使用中很容易被浏览器/插件静默拦截或被用户不经意划走，"看起来没反应"更可能是这个原因，而不是代码逻辑错误
+  - 用户反馈"新建任务时最好能指定或新建文件夹"——顺势把两个诉求一起解决：`SidebarLeft.vue` 的"+ 新建任务"点击后不再直接创建，而是展开一个内联小面板（任务标题 + 工作区下拉框，下拉框里有"+ 新建文件夹…"选项，选中后出现文件夹名输入框），一次交互同时覆盖"指定已有文件夹"和"新建文件夹"两种诉求；确认按钮在"选择新建文件夹但没填名字"时禁用
+  - 移除了独立的、依赖 `window.prompt` 的"新建工作区"按钮（`icon-add-directory`），其能力已经并入上面的面板；`WorkspaceTree.vue` 每个工作区分组上那个悬停可见的"+"（在已展开的某个具体工作区里快速建任务）保留不变，两者不冲突
+  - 真实端到端验证（Playwright 操作真实 Chromium，非单元测试 mock）：打开面板 → 填标题 → 下拉选"+新建文件夹" → 填新文件夹名 → 确认按钮从禁用变可点 → 点击 → 面板关闭 → 侧边栏里新文件夹和任务都正确出现
+  - 前端测试：重写 `tests/components/SidebarLeft.spec.ts`（6 个，覆盖面板开关/选已有工作区建任务/自定义标题/新建文件夹+建任务两步请求/确认按钮禁用态/取消不发请求）；共 103 个测试全部通过，typecheck 干净，prod build 验证通过
