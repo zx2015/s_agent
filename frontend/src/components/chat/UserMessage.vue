@@ -1,28 +1,21 @@
 <template>
-  <div class="user-message">
-    <div class="bubble">{{ text }}</div>
-  </div>
+  <McBubble class="user-bubble" align="right" variant="filled" :content="text" />
 </template>
 
 <script setup lang="ts">
+import { McBubble } from '@matechat/core'
+
 defineProps<{ text: string }>()
 </script>
 
 <style scoped>
-.user-message {
-  display: flex;
-  justify-content: flex-end;
+.user-bubble {
   margin: 12px 0;
 }
 
-.bubble {
-  max-width: 70%;
-  padding: 10px 14px;
+.user-bubble :deep(.mc-bubble-content) {
   background: #165dff;
   color: #fff;
-  border-radius: 12px 12px 2px 12px;
-  font-size: 14px;
-  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }

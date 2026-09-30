@@ -9,6 +9,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **后端**：基于 **AgentScope** 框架构建智能体核心，使用 **FastAPI** 对外暴露 SSE（Server-Sent Events）流式接口。
 - **演进原则**：**先通用后专用**。必须在通用 Agent 的 SSE 流式一问一答、会话管理等基础链路完全工作后，再扩展股票分析能力（行情工具、计算器、持仓跟踪、行业知识库等）。
 
+> **实现状态（2026-09-30）**：通用 Agent 闭环的前后端骨架均已落地。`server/`
+> 包含 `main.py`（FastAPI 路由）、`agent/core.py`（AgentScope Agent 装配）、
+> `service/events.py`（AgentScope 事件 → 前端 SSE 契约翻译器）、
+> `service/task_manager.py`（工作区/任务注册表 + 每任务 Agent + HITL 确认桥
+> 接）、`tools/calculator.py`（受限 AST 四则运算求值器）；前端已接入
+> MateChat 的 `McInput`/`McBubble` 组件。尚未验证的是**真实模型端到端对话**
+> ——本地开发环境缺少可用的 `LITELLM_API_KEY`，只验证了「缺 key 时优雅降
+> 级」的路径。详见 `TODO.md`「进行中」与「待办」。
+
 ---
 
 ## 常用开发命令

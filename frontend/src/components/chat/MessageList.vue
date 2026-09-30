@@ -16,8 +16,8 @@
     <HitlConfirmCard
       v-if="store.pendingConfirm"
       :confirm="store.pendingConfirm"
-      @allow="store.resolveConfirm('allow')"
-      @deny="store.resolveConfirm('deny')"
+      @allow="confirmToolCall('allow')"
+      @deny="confirmToolCall('deny')"
     />
   </div>
 </template>
@@ -28,6 +28,9 @@ import UserMessage from './UserMessage.vue'
 import AssistantMessage from './AssistantMessage.vue'
 import HitlConfirmCard from './HitlConfirmCard.vue'
 import { useSessionStore } from '@/store/session'
+import { useChat } from '@/composables/useChat'
+
+const { confirmToolCall } = useChat()
 
 const store = useSessionStore()
 const scrollArea = ref<HTMLElement | null>(null)

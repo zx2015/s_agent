@@ -36,10 +36,10 @@ const query = computed({
   set: (value: string) => store.setSearchQuery(value),
 })
 
-function createTask(): void {
+async function createTask(): Promise<void> {
   const target = store.workspaces[0]
-  if (!target) return
-  const task = store.createTask(target.id, '新任务')
+  const workspaceId = target?.id ?? 'default'
+  const task = await store.createTaskRemote(workspaceId, '新任务')
   store.selectTask(task.id)
 }
 </script>

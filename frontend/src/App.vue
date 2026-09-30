@@ -16,11 +16,19 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import ThreeColumnLayout from '@/components/layout/ThreeColumnLayout.vue'
 import SettingsDrawer from '@/components/sidebar/SettingsDrawer.vue'
 import { useWorkspaceStore } from '@/store/workspaces'
 
 const workspace = useWorkspaceStore()
+
+// Populate the sidebar from the backend once on load. If the backend is
+// unreachable, the sidebar just stays empty rather than blocking the UI —
+// the workbench chrome (settings, layout) still works without it.
+onMounted(() => {
+  workspace.fetchWorkspaces().catch(() => {})
+})
 </script>
 
 <style scoped>

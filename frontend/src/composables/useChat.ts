@@ -87,5 +87,32 @@ export function useChat() {
     } as never)
   }
 
-  return { send, stop }
+  /**
+   * Resolve a pending HITL confirmation.
+   *
+   * Posting to `/api/tasks/{id}/confirm` resolves the `asyncio.Future`
+   * the backend's still-open `/api/chat` SSE connection is awaiting (see
+   * `server/service/task_manager.py`), so the same stream resumes and
+   * keeps yielding frames after this call returns. The card is cleared
+   * locally either way — a stale confirm request (network error, task
+   * already moved on) should not leave the UI stuck.
+   */
+  async function confirmToolCall(action: 'allow' | 'deny'): Promise<void> {
+    const pending = session.pendingConfirm
+    const taskId = workspace.activeTaskId
+    session.resolveConfirm(action)
+    if (!pending || !taskId || USE_MOCK) return
+
+    try {
+      await apiClient.post(`/api/tasks/${taskId}/confirm`, {
+        replyId: pending.replyId,
+        action,
+      })
+    } catch {
+      // Nothing more to do — the card is already cleared, and the
+      // backend's own turn will time out/error on its side.
+    }
+  }
+
+  return { send, stop, confirmToolCall }
 }

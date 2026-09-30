@@ -10,6 +10,7 @@
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { apiClient } from '@/api/client'
 import type { Task, Workspace } from '@/types'
 
 let taskCounter = 0
@@ -111,6 +112,42 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     if (task) task.hasArtifacts = true
   }
 
+  /**
+   * Load the workspace/task tree from the backend.
+   *
+   * Called once on app start (see `App.vue`). The backend always returns
+   * at least a `default` workspace (see `server/service/task_manager.py`),
+   * so `createTaskRemote` below never has to special-case "no workspace
+   * exists yet".
+   */
+  async function fetchWorkspaces(): Promise<void> {
+    const response = await apiClient.get<{ workspaces: Workspace[] }>(
+      '/api/workspaces',
+    )
+    setWorkspaces(response.workspaces)
+  }
+
+  /**
+   * Create a task via the backend (so its workspace directory and git
+   * repo exist before the first chat message) and reflect it locally.
+   */
+  async function createTaskRemote(
+    workspaceId: string,
+    title: string,
+  ): Promise<Task> {
+    const task = await apiClient.post<Task>('/api/tasks', {
+      workspaceId,
+      title,
+    })
+    let workspace = workspaces.value.find((item) => item.id === workspaceId)
+    if (!workspace) {
+      workspace = { id: workspaceId, name: workspaceId, tasks: [] }
+      workspaces.value.push(workspace)
+    }
+    workspace.tasks.unshift(task)
+    return task
+  }
+
   return {
     workspaces,
     searchQuery,
@@ -125,5 +162,7 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     archiveTask,
     createTask,
     markArtifacts,
+    fetchWorkspaces,
+    createTaskRemote,
   }
 })
