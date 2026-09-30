@@ -14,6 +14,7 @@ describe('SSE contract', () => {
         'artifact_created',
         'done',
         'require_confirm',
+        'task_renamed',
         'text_delta',
         'thinking_delta',
         'tool_call_end',

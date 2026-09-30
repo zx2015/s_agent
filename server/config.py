@@ -20,6 +20,14 @@ LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 MODEL_NAME = os.getenv("S_AGENT_MODEL_NAME", "v-flash")
 MODEL_MAX_TOKENS = int(os.getenv("S_AGENT_MODEL_MAX_TOKENS", "2048"))
 
+# A separate, deliberately small/cheap model for one-shot, low-stakes text
+# generation (currently: auto-titling a new conversation from its first
+# message — see server/service/title_generator.py). Using the same model
+# as the main agent (`MODEL_NAME`) would work but wastes its larger
+# per-token cost and latency on a task that a "flash-lite" tier model
+# handles just as well.
+MODEL_NAME_TITLE = os.getenv("S_AGENT_TITLE_MODEL_NAME", "Gemini/Gemini-3.5-Flash-Lite")
+
 # --- Workspace storage ---
 # Gitignored (see .gitignore's `workspaces/` entry) so per-task file trees
 # and the task/workspace registry never enter version control.

@@ -239,6 +239,22 @@ describe('WorkspaceTree', () => {
     // isolated to the delete action.
     expect(wrapper.text()).toContain('生成落地页')
   })
+
+  it('does not render a delete button for the default workspace', () => {
+    const store = useWorkspaceStore()
+    store.setWorkspaces([
+      { id: 'default', name: '默认工作区', tasks: [] },
+      ...structuredClone(FIXTURE),
+    ])
+    const wrapper = mount(WorkspaceTree)
+
+    expect(wrapper.find('[data-test="delete-workspace-default"]').exists()).toBe(
+      false,
+    )
+    expect(wrapper.find('[data-test="delete-workspace-w1"]').exists()).toBe(
+      true,
+    )
+  })
 })
 
 function flushPromises(): Promise<void> {

@@ -190,9 +190,17 @@ class TaskManager:
         the exact same cleanup (metadata, cached agent, Redis state,
         workspace directory) rather than a shortcut that only handles
         the workspace record itself. Returns `False` without touching
-        anything if the workspace doesn't exist.
+        anything if the workspace doesn't exist, or if it's the
+        "default" workspace (see `_ensure_workspace("default", ...)` in
+        `__init__` — always exists, and is the fallback every task lands
+        in when no other workspace has been created yet, so removing it
+        would leave the app with no default place to put a task). `main.py`
+        also checks this up front to return a clearer 400 instead of a
+        generic 404, but the guard is repeated here so this method is
+        safe to call directly (e.g. from tests) without relying on the
+        route layer.
         """
-        if workspace_id not in self._workspaces:
+        if workspace_id == "default" or workspace_id not in self._workspaces:
             return False
 
         task_ids = [

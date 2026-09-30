@@ -18,6 +18,7 @@
           <span class="icon-add" />
         </button>
         <button
+          v-if="workspace.id !== 'default'"
           class="delete-workspace-button"
           :data-test="`delete-workspace-${workspace.id}`"
           title="删除工作区"

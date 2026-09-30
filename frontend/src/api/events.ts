@@ -13,6 +13,7 @@ export const EVENT_NAMES = [
   'tool_call_end',
   'artifact_created',
   'require_confirm',
+  'task_renamed',
   'done',
 ] as const
 
@@ -49,6 +50,18 @@ export interface RequireConfirmData {
   command: string
   reason: string
   action: 'allow'
+}
+
+/**
+ * Emitted once, right before the first reply of a brand-new task starts
+ * streaming, when the backend has auto-generated a title from the
+ * user's first message (see `server/service/title_generator.py`).
+ * Not part of `AgentEventTranslator`'s AgentScope-event mirroring like
+ * the others above — `main.py`'s `/api/chat` handler emits this one
+ * directly, the same way it does for `artifact_created`.
+ */
+export interface TaskRenamedData {
+  title: string
 }
 
 export interface DoneData {

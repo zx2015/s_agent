@@ -107,6 +107,16 @@ export function useChat() {
         task_id: taskId,
         message,
       })) {
+        // Not a chat-transcript frame — routed straight to the workspace
+        // store instead of `session.applyFrame` (which is turn-guarded
+        // for message content, see `store/session.ts`). `renameTask` is
+        // local-only by design (see its docstring): the backend has
+        // already persisted the new title by the time this frame
+        // arrives, so no extra API round-trip is needed here.
+        if (parsed.event === 'task_renamed') {
+          workspace.renameTask(taskId, String(parsed.data.title))
+          continue
+        }
         session.applyFrame(parsed as never)
       }
     } catch {

@@ -107,4 +107,43 @@ describe('useChat', () => {
     stop()
     expect(session.isStreaming).toBe(false)
   })
+
+  it('renames the active task locally on a task_renamed frame instead of adding it to the transcript', async () => {
+    seedTask()
+
+    const sseBody = [
+      'event: task_renamed\ndata: {"title":"分析个人主页需求"}\n\n',
+      'event: text_delta\ndata: {"text":"好的"}\n\n',
+      'event: done\ndata: {"task_status":"completed"}\n\n',
+    ].join('')
+    const encoder = new TextEncoder()
+    const chunk = encoder.encode(sseBody)
+    let read = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (read) return { done: true, value: undefined }
+              read = true
+              return { done: false, value: chunk }
+            },
+          }),
+        },
+      }),
+    )
+
+    const workspace = useWorkspaceStore()
+    const session = useSessionStore()
+    const { send } = useChat()
+    await send('帮我写一个个人主页的 HTML 页面')
+
+    expect(workspace.findTask('t1')?.title).toBe('分析个人主页需求')
+    // Only the user turn and the assistant's actual reply should be in
+    // the transcript — the rename frame must not leak in as a message.
+    expect(session.messages).toHaveLength(2)
+    expect(session.messages[1].text).toBe('好的')
+  })
 })

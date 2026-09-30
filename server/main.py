@@ -5,6 +5,7 @@ Endpoints mirror `docs/specs/2026-09-28-frontend-three-column-workbench.md`
 §3.1 exactly — the frontend's `apiClient` and Pinia stores are built
 against those paths and payload shapes already.
 """
+import asyncio
 import time
 import zipfile
 from pathlib import Path
@@ -29,6 +30,7 @@ from server.schemas.chat import (
 )
 from server.service.events import AgentEventTranslator, sse_frame
 from server.service.task_manager import task_manager
+from server.service.title_generator import generate_title
 
 app = FastAPI(title="s_agent backend")
 
@@ -66,6 +68,15 @@ async def create_workspace(payload: CreateWorkspaceRequest) -> dict:
 
 @app.delete("/api/workspaces/{workspace_id}")
 async def delete_workspace(workspace_id: str) -> dict:
+    # The "default" workspace is created unconditionally on startup (see
+    # `TaskManager.__init__`'s `_ensure_workspace("default", ...)`) and is
+    # where `create_task`/`ensureActiveTask` fall back to when no other
+    # workspace exists — deleting it would leave the app with nowhere to
+    # put a task by default. A dedicated 400 here (rather than letting it
+    # fall through to `delete_workspace`'s generic False/404) gives a
+    # clear reason instead of a bare "not found".
+    if workspace_id == "default":
+        raise HTTPException(status_code=400, detail="默认工作区不能删除")
     deleted = await task_manager.delete_workspace(workspace_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="workspace not found")
@@ -104,6 +115,18 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
 
+    # Every task is created with the same placeholder title ("新任务" —
+    # see `SidebarLeft.vue`/`WorkspaceTree.vue`/`useChat.ts`'s
+    # `ensureActiveTask`, all three task-creation paths use it), so it
+    # doubles as "this task has never had a title generated for it yet"
+    # without needing a separate boolean field. Kicked off as a
+    # background task *before* `get_or_create_agent` below so the LLM
+    # round-trip overlaps with agent creation/loading instead of adding
+    # its own latency on top.
+    title_task = None
+    if task.title == "新任务":
+        title_task = asyncio.create_task(generate_title(payload.message))
+
     async def event_stream():
         try:
             agent = await task_manager.get_or_create_agent(payload.task_id)
@@ -111,6 +134,11 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
             yield sse_frame("text_delta", {"text": f"[后端配置错误: {exc}]"})
             yield sse_frame("done", {"task_status": "failed"})
             return
+
+        if title_task is not None:
+            new_title = await title_task
+            task_manager.update_task(payload.task_id, title=new_title)
+            yield sse_frame("task_renamed", {"title": new_title})
 
         translator = AgentEventTranslator()
         turn_started_at = time.time()

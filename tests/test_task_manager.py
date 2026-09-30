@@ -164,3 +164,16 @@ async def test_delete_workspace_with_no_tasks_just_removes_the_workspace():
     assert deleted is True
     workspace_ids = {w["id"] for w in manager.list_workspaces()}
     assert workspace.id not in workspace_ids
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_refuses_to_delete_the_default_workspace():
+    manager = TaskManager()
+    task = manager.create_task("default", "不该被牵连的任务")
+
+    deleted = await manager.delete_workspace("default")
+
+    assert deleted is False
+    workspace_ids = {w["id"] for w in manager.list_workspaces()}
+    assert "default" in workspace_ids
+    assert manager.get_task(task.id) is not None
