@@ -39,7 +39,9 @@ from server.service.memory_store import agent_state_store
 
 logger = logging.getLogger(__name__)
 
-_REGISTRY_FILE = config.WORKSPACES_ROOT / "registry.json"
+
+def _default_registry_path(root_dir: Path) -> Path:
+    return root_dir / "registry.json"
 
 
 @dataclass
@@ -59,7 +61,23 @@ class WorkspaceRecord:
 
 
 class TaskManager:
-    def __init__(self) -> None:
+    def __init__(self, root_dir: Path | None = None) -> None:
+        # Defaulting to the production workspace root is the historical
+        # behaviour, but it means any test that forgets to pass
+        # ``tmp_path`` will silently write to the developer's real
+        # registry and pollute their sidebar. The warning makes that
+        # mistake loud rather than silent.
+        if root_dir is None:
+            logger.warning(
+                "TaskManager using production default workspace root "
+                "%s -- pass an explicit root_dir from tests to keep state "
+                "isolated.",
+                config.WORKSPACES_ROOT,
+            )
+            root_dir = config.WORKSPACES_ROOT
+
+        self.root_dir: Path = Path(root_dir)
+        self._registry_path: Path = _default_registry_path(self.root_dir)
         self._workspaces: dict[str, WorkspaceRecord] = {}
         self._tasks: dict[str, TaskRecord] = {}
         self._agents: dict[str, Agent] = {}
@@ -216,7 +234,7 @@ class TaskManager:
     # --- workspace directories ------------------------------------------------
 
     def workspace_dir(self, task_id: str) -> Path:
-        return config.WORKSPACES_ROOT / task_id
+        return self.root_dir / task_id
 
     def _init_git(self, task_id: str) -> None:
         import subprocess
@@ -305,20 +323,20 @@ class TaskManager:
     # --- persistence -----------------------------------------------------------
 
     def _save(self) -> None:
-        config.WORKSPACES_ROOT.mkdir(parents=True, exist_ok=True)
+        self.root_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "workspaces": [vars(w) for w in self._workspaces.values()],
             "tasks": [vars(t) for t in self._tasks.values()],
         }
-        _REGISTRY_FILE.write_text(
+        self._registry_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
         )
 
     def _load(self) -> None:
-        if not _REGISTRY_FILE.exists():
+        if not self._registry_path.exists():
             return
         try:
-            payload = json.loads(_REGISTRY_FILE.read_text())
+            payload = json.loads(self._registry_path.read_text())
         except (json.JSONDecodeError, OSError):
             return
         for entry in payload.get("workspaces", []):

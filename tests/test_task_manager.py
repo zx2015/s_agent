@@ -1,4 +1,5 @@
 """Unit tests for server/service/task_manager.py's persistence wiring."""
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -7,16 +8,26 @@ from server.service.memory_store import agent_state_store
 from server.service.task_manager import TaskManager
 
 
+@pytest.fixture
+def manager(tmp_path: Path) -> TaskManager:
+    """An isolated TaskManager instance rooted at a temporary directory.
+
+    Passing an explicit root_dir guarantees these tests never write to the
+    developer's real `workspaces/registry.json` or pollute the sidebar with
+    fixture names like "我的新工作区".
+    """
+    return TaskManager(root_dir=tmp_path)
+
+
 @pytest.mark.asyncio
-async def test_save_agent_state_is_a_noop_when_agent_was_never_built():
-    manager = TaskManager()
+async def test_save_agent_state_is_a_noop_when_agent_was_never_built(manager: TaskManager):
     # No get_or_create_agent() call happened for this id, so there is
     # nothing in manager._agents — must not raise.
     await manager.save_agent_state("never-touched-task")
 
 
 @pytest.mark.asyncio
-async def test_save_agent_state_swallows_persistence_failures():
+async def test_save_agent_state_swallows_persistence_failures(manager: TaskManager):
     """A Redis hiccup during save must not raise past this call.
 
     By the time save_agent_state() runs, the turn's SSE frames (including
@@ -25,7 +36,6 @@ async def test_save_agent_state_swallows_persistence_failures():
     caller's outer except would send a second, spurious done/error frame
     after an otherwise-successful reply.
     """
-    manager = TaskManager()
     fake_agent = type("FakeAgent", (), {"state": object()})()
     manager._agents["t1"] = fake_agent  # type: ignore[assignment]
 
@@ -38,14 +48,12 @@ async def test_save_agent_state_swallows_persistence_failures():
 
 
 @pytest.mark.asyncio
-async def test_delete_task_returns_false_for_an_unknown_task():
-    manager = TaskManager()
+async def test_delete_task_returns_false_for_an_unknown_task(manager: TaskManager):
     assert await manager.delete_task("does-not-exist") is False
 
 
 @pytest.mark.asyncio
-async def test_delete_task_removes_metadata_agent_state_and_workspace():
-    manager = TaskManager()
+async def test_delete_task_removes_metadata_agent_state_and_workspace(manager: TaskManager):
     task = manager.create_task("default", "待删除的测试任务")
     workspace_dir = manager.workspace_dir(task.id)
     assert workspace_dir.exists()
@@ -67,9 +75,8 @@ async def test_delete_task_removes_metadata_agent_state_and_workspace():
 
 
 @pytest.mark.asyncio
-async def test_delete_task_swallows_redis_failures():
+async def test_delete_task_swallows_redis_failures(manager: TaskManager):
     """A Redis hiccup during delete must not stop metadata/file cleanup."""
-    manager = TaskManager()
     task = manager.create_task("default", "redis失败时也要删除的任务")
 
     with patch(
@@ -83,8 +90,7 @@ async def test_delete_task_swallows_redis_failures():
     assert not manager.workspace_dir(task.id).exists()
 
 
-def test_create_workspace_assigns_a_fresh_id_and_the_given_display_name():
-    manager = TaskManager()
+def test_create_workspace_assigns_a_fresh_id_and_the_given_display_name(manager: TaskManager):
     workspace = manager.create_workspace("我的新工作区")
 
     assert workspace.name == "我的新工作区"
@@ -94,16 +100,14 @@ def test_create_workspace_assigns_a_fresh_id_and_the_given_display_name():
     assert listed[workspace.id] == "我的新工作区"
 
 
-def test_create_workspace_starts_with_no_tasks():
-    manager = TaskManager()
+def test_create_workspace_starts_with_no_tasks(manager: TaskManager):
     workspace = manager.create_workspace("空的工作区")
 
     listed = {w["id"]: w for w in manager.list_workspaces()}
     assert listed[workspace.id]["tasks"] == []
 
 
-def test_created_workspace_can_receive_tasks():
-    manager = TaskManager()
+def test_created_workspace_can_receive_tasks(manager: TaskManager):
     workspace = manager.create_workspace("可以建任务的工作区")
     task = manager.create_task(workspace.id, "这个工作区里的第一个任务")
 
@@ -112,14 +116,12 @@ def test_created_workspace_can_receive_tasks():
 
 
 @pytest.mark.asyncio
-async def test_delete_workspace_returns_false_for_an_unknown_workspace():
-    manager = TaskManager()
+async def test_delete_workspace_returns_false_for_an_unknown_workspace(manager: TaskManager):
     assert await manager.delete_workspace("does-not-exist") is False
 
 
 @pytest.mark.asyncio
-async def test_delete_workspace_cascades_to_every_task_inside_it():
-    manager = TaskManager()
+async def test_delete_workspace_cascades_to_every_task_inside_it(manager: TaskManager):
     workspace = manager.create_workspace("待整体删除的工作区")
     task_a = manager.create_task(workspace.id, "任务A")
     task_b = manager.create_task(workspace.id, "任务B")
@@ -140,8 +142,7 @@ async def test_delete_workspace_cascades_to_every_task_inside_it():
 
 
 @pytest.mark.asyncio
-async def test_delete_workspace_leaves_other_workspaces_untouched():
-    manager = TaskManager()
+async def test_delete_workspace_leaves_other_workspaces_untouched(manager: TaskManager):
     workspace_to_delete = manager.create_workspace("要删的工作区")
     workspace_to_keep = manager.create_workspace("要留的工作区")
     manager.create_task(workspace_to_delete.id, "会被删掉的任务")
@@ -155,8 +156,7 @@ async def test_delete_workspace_leaves_other_workspaces_untouched():
 
 
 @pytest.mark.asyncio
-async def test_delete_workspace_with_no_tasks_just_removes_the_workspace():
-    manager = TaskManager()
+async def test_delete_workspace_with_no_tasks_just_removes_the_workspace(manager: TaskManager):
     workspace = manager.create_workspace("空的待删工作区")
 
     deleted = await manager.delete_workspace(workspace.id)
@@ -167,8 +167,7 @@ async def test_delete_workspace_with_no_tasks_just_removes_the_workspace():
 
 
 @pytest.mark.asyncio
-async def test_delete_workspace_refuses_to_delete_the_default_workspace():
-    manager = TaskManager()
+async def test_delete_workspace_refuses_to_delete_the_default_workspace(manager: TaskManager):
     task = manager.create_task("default", "不该被牵连的任务")
 
     deleted = await manager.delete_workspace("default")
