@@ -9,6 +9,14 @@
         <span class="chevron">{{ isCollapsed(workspace.id) ? '▸' : '▾' }}</span>
         <span class="group-name">{{ workspace.name }}</span>
         <span class="group-count">{{ workspace.tasks.length }}</span>
+        <button
+          class="add-task-button"
+          :data-test="`new-task-in-${workspace.id}`"
+          title="在此工作区新建任务"
+          @click.stop="onNewTaskClick(workspace.id)"
+        >
+          <span class="icon-add" />
+        </button>
       </header>
 
       <McList
@@ -39,7 +47,7 @@
               title="删除对话"
               @click.stop="onDeleteClick(String(item.value), item.label)"
             >
-              ✕
+              <McDeleteIcon :width="14" :height="14" />
             </button>
           </div>
         </template>
@@ -55,6 +63,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { McList } from '@matechat/core'
+import { McDeleteIcon } from '@matechat/core/Toolbar'
 import { ListVariant } from '@matechat/core/List'
 import { useWorkspaceStore } from '@/store/workspaces'
 import { useSessionStore } from '@/store/session'
@@ -95,6 +104,19 @@ function toggle(workspaceId: string): void {
     next.add(workspaceId)
   }
   collapsed.value = next
+}
+
+/**
+ * Targets a task at a specific workspace — the direct answer to "how do
+ * I pick which workspace a new task goes into": click "+" on that
+ * workspace's own row, rather than always landing in whichever workspace
+ * happens to be first (see `SidebarLeft.vue`'s top-level "+ 新建任务",
+ * which still does that for a quick default). `@click.stop` keeps this
+ * from also toggling the group's collapse state.
+ */
+async function onNewTaskClick(workspaceId: string): Promise<void> {
+  const task = await store.createTaskRemote(workspaceId, '新任务')
+  store.selectTask(task.id)
 }
 
 /**
@@ -144,6 +166,31 @@ async function onDeleteClick(taskId: string, title: string): Promise<void> {
 
 .group-count {
   font-size: 11px;
+}
+
+.add-task-button {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.group-header:hover .add-task-button {
+  display: flex;
+}
+
+.add-task-button:hover {
+  background: var(--color-bg-subtle);
+  color: #165dff;
 }
 
 .task-item {

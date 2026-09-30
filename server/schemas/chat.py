@@ -41,6 +41,12 @@ class CreateTaskRequest(BaseModel):
     title: str = "新任务"
 
 
+class CreateWorkspaceRequest(BaseModel):
+    model_config = CamelModel
+
+    name: str
+
+
 class UpdateTaskRequest(BaseModel):
     model_config = CamelModel
 

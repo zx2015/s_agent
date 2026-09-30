@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useWorkspaceStore } from '@/store/workspaces'
 import type { Workspace } from '@/types'
@@ -131,5 +131,20 @@ describe('workspace store', () => {
   it('marks a task as having artifacts', () => {
     store.markArtifacts('t2')
     expect(store.findTask('t2')?.hasArtifacts).toBe(true)
+  })
+
+  it('creates a workspace via the backend and adds it to the tree', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ id: 'w-new', name: '新工作区', tasks: [] }),
+      }),
+    )
+
+    const workspace = await store.createWorkspaceRemote('新工作区')
+
+    expect(workspace).toEqual({ id: 'w-new', name: '新工作区', tasks: [] })
+    expect(store.workspaces.map((w) => w.id)).toContain('w-new')
   })
 })

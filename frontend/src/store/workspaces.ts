@@ -172,6 +172,19 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     return task
   }
 
+  /**
+   * Create a new, empty workspace via the backend (see
+   * `TaskManager.create_workspace`) so the user has somewhere to put a
+   * task other than "default" — the sidebar's "+ 新建工作区" action.
+   */
+  async function createWorkspaceRemote(name: string): Promise<Workspace> {
+    const workspace = await apiClient.post<Workspace>('/api/workspaces', {
+      name,
+    })
+    workspaces.value.push(workspace)
+    return workspace
+  }
+
   return {
     workspaces,
     searchQuery,
@@ -189,5 +202,6 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     fetchWorkspaces,
     createTaskRemote,
     deleteTaskRemote,
+    createWorkspaceRemote,
   }
 })

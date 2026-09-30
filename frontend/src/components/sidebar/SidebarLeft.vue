@@ -1,7 +1,16 @@
 <template>
   <McLayoutAside class="sidebar-left">
     <header class="sidebar-header">
-      <button class="new-task" @click="createTask">+ 新建任务</button>
+      <div class="header-actions">
+        <button class="new-task" @click="createTask">+ 新建任务</button>
+        <button
+          class="new-workspace"
+          title="新建工作区"
+          @click="createWorkspace"
+        >
+          <span class="icon-add-directory" />
+        </button>
+      </div>
       <input
         v-model="query"
         class="search-input"
@@ -43,6 +52,17 @@ async function createTask(): Promise<void> {
   const task = await store.createTaskRemote(workspaceId, '新任务')
   store.selectTask(task.id)
 }
+
+/**
+ * The other way to pick a workspace for a task — via `WorkspaceTree.vue`'s
+ * per-group "+" button — only works for workspaces that already exist.
+ * This is what actually creates a new one to target.
+ */
+async function createWorkspace(): Promise<void> {
+  const name = window.prompt('新工作区的名称：')
+  if (!name || !name.trim()) return
+  await store.createWorkspaceRemote(name.trim())
+}
 </script>
 
 <style scoped>
@@ -69,7 +89,13 @@ async function createTask(): Promise<void> {
   padding: 12px;
 }
 
+.header-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .new-task {
+  flex: 1;
   padding: 8px;
   border: 1px solid var(--color-border);
   border-radius: 6px;
@@ -80,6 +106,25 @@ async function createTask(): Promise<void> {
 
 .new-task:hover {
   background: var(--color-bg-subtle);
+}
+
+.new-workspace {
+  flex-shrink: 0;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.new-workspace:hover {
+  background: var(--color-bg-subtle);
+  color: #165dff;
 }
 
 .search-input {

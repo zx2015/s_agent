@@ -81,3 +81,31 @@ async def test_delete_task_swallows_redis_failures():
     assert deleted is True
     assert manager.get_task(task.id) is None
     assert not manager.workspace_dir(task.id).exists()
+
+
+def test_create_workspace_assigns_a_fresh_id_and_the_given_display_name():
+    manager = TaskManager()
+    workspace = manager.create_workspace("我的新工作区")
+
+    assert workspace.name == "我的新工作区"
+    assert workspace.id != "我的新工作区"  # unlike create_task's implicit path
+
+    listed = {w["id"]: w["name"] for w in manager.list_workspaces()}
+    assert listed[workspace.id] == "我的新工作区"
+
+
+def test_create_workspace_starts_with_no_tasks():
+    manager = TaskManager()
+    workspace = manager.create_workspace("空的工作区")
+
+    listed = {w["id"]: w for w in manager.list_workspaces()}
+    assert listed[workspace.id]["tasks"] == []
+
+
+def test_created_workspace_can_receive_tasks():
+    manager = TaskManager()
+    workspace = manager.create_workspace("可以建任务的工作区")
+    task = manager.create_task(workspace.id, "这个工作区里的第一个任务")
+
+    listed = {w["id"]: w for w in manager.list_workspaces()}
+    assert [t["id"] for t in listed[workspace.id]["tasks"]] == [task.id]

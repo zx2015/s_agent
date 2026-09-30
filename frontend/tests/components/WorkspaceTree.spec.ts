@@ -135,6 +135,58 @@ describe('WorkspaceTree', () => {
     expect(store.activeTaskId).toBe('other-task')
     expect(session.messages).toHaveLength(1)
   })
+
+  it('creates a task in a specific workspace via its "+" button', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 't-new',
+          title: '新任务',
+          workspaceId: 'w1',
+          status: 'running',
+          updatedAt: '',
+          hasArtifacts: false,
+        }),
+      }),
+    )
+    const { wrapper, store } = mountTree()
+
+    await wrapper.find('[data-test="new-task-in-w1"]').trigger('click')
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/tasks',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(store.activeTaskId).toBe('t-new')
+    expect(store.findTask('t-new')?.workspaceId).toBe('w1')
+  })
+
+  it("clicking a workspace's + button does not also toggle its collapse state", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 't-new',
+          title: '新任务',
+          workspaceId: 'w1',
+          status: 'running',
+          updatedAt: '',
+          hasArtifacts: false,
+        }),
+      }),
+    )
+    const { wrapper } = mountTree()
+
+    await wrapper.find('[data-test="new-task-in-w1"]').trigger('click')
+    await flushPromises()
+
+    // The original task is still visible, i.e. the group did not collapse.
+    expect(wrapper.text()).toContain('生成落地页')
+  })
 })
 
 function flushPromises(): Promise<void> {

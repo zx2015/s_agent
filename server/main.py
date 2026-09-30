@@ -22,6 +22,7 @@ from server.schemas.chat import (
     ChatRequest,
     ConfirmRequest,
     CreateTaskRequest,
+    CreateWorkspaceRequest,
     TaskOut,
     UpdateTaskRequest,
     WorkspaceOut,
@@ -51,6 +52,16 @@ async def list_workspaces() -> dict:
         for workspace in task_manager.list_workspaces()
     ]
     return {"workspaces": workspaces}
+
+
+@app.post("/api/workspaces")
+async def create_workspace(payload: CreateWorkspaceRequest) -> dict:
+    workspace = task_manager.create_workspace(payload.name)
+    return WorkspaceOut(
+        id=workspace.id,
+        name=workspace.name,
+        tasks=[],
+    ).model_dump(by_alias=True)
 
 
 @app.post("/api/tasks")

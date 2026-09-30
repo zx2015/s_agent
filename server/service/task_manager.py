@@ -75,6 +75,24 @@ class TaskManager:
             self._save()
         return self._workspaces[workspace_id]
 
+    def create_workspace(self, name: str) -> WorkspaceRecord:
+        """Create a new, empty workspace the user can then create tasks in.
+
+        Unlike `create_task`, which implicitly creates whatever
+        `workspace_id` it's given via `_ensure_workspace` (so passing an
+        unseen id has always silently worked), this is the explicit,
+        user-facing "new workspace" action — it exists so the frontend
+        can offer "+ 新建工作区" without a task attached yet, and so the
+        workspace gets a real display `name` distinct from its id (the
+        implicit path reuses the id as the name, which is fine for
+        "default" but not for anything a user types).
+        """
+        workspace_id = f"workspace-{len(self._workspaces) + 1}-{int(time.time() * 1000)}"
+        workspace = WorkspaceRecord(id=workspace_id, name=name)
+        self._workspaces[workspace_id] = workspace
+        self._save()
+        return workspace
+
     def list_workspaces(self) -> list[dict]:
         tasks_by_workspace: dict[str, list[TaskRecord]] = {}
         for task in self._tasks.values():

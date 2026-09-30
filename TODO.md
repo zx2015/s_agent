@@ -68,3 +68,10 @@
   - 真实端到端验证：建任务 → 对话 → 确认工作区目录/Redis key/任务列表三处都存在 → 调用删除 → 三处全部清除；重复删除同一 task 正确返回 404
   - 顺带发现但本次不修：「归档」按钮目前只在前端本地隐藏任务，从未调用后端，刷新页面会复活（见「待办」）
   - 新增/更新测试：后端 `tests/test_task_manager.py`（+3 个）；前端 `tests/api/client.spec.ts`（+1 个）、`tests/components/WorkspaceTree.spec.ts`（+4 个）；后端测试 24→27，前端测试 89→94，全部通过
+- [x] 删除按钮改用图标 + 支持指定/新建工作区 — 2026-09-30
+  - 删除按钮从纯文本"✕"改为 `McDeleteIcon`（`@matechat/core/Toolbar`），进一步减少手写图标、复用 MateChat 组件
+  - 后端新增 `POST /api/workspaces`（`TaskManager.create_workspace(name)`），生成独立于显示名的 workspace id，起始不带任何任务——区别于 `create_task` 隐式建工作区那条路径（那条路径把 workspace_id 本身当显示名用，对"default"合适，对用户输入的名字不合适）
+  - 前端：`WorkspaceTree.vue` 每个工作区分组 header 新增"+"按钮（`icon-add`），点击直接在**该工作区**里建任务并选中——这就是"如何指定工作区"的答案：点哪个分组的"+"，任务就归到哪个工作区；`SidebarLeft.vue` 顶部新增"新建工作区"按钮（`icon-add-directory`），`window.prompt` 输入名称后调用后端创建
+  - 原来顶部"+ 新建任务"保持不变（仍是快速创建到第一个工作区的默认行为），新增的都是叠加能力，不影响老路径
+  - 真实端到端验证：`POST /api/workspaces` 建"我的新项目" → 在该工作区 id 下建任务 → `GET /api/workspaces` 确认分组正确、任务归属正确
+  - 新增/更新测试：后端 `tests/test_task_manager.py`（+3 个，覆盖 `create_workspace` 的 id 生成、空任务列表、可正常接收任务）；前端 `tests/store/workspaces.spec.ts`（+1）、`tests/components/WorkspaceTree.spec.ts`（+2）、新增 `tests/components/SidebarLeft.spec.ts`（3 个）；后端测试 27→30，前端测试 94→100，typecheck 与 prod build 均验证通过
