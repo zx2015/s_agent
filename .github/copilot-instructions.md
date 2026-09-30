@@ -118,6 +118,17 @@ that span multiple files:
   `Grep`/`AskUser`/`TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` as
   built-ins; only `server/tools/calculator.py` (a restricted-AST arithmetic
   evaluator, per `CLAUDE.md`'s "严禁心算" rule) is project-specific.
+- **The system prompt sent to the model is not just
+  `SYSTEM_PROMPT_TEMPLATE`**: AgentScope assembles it in three layers at
+  reply time (our fixed string + toolkit skill/offloader instructions +
+  nothing else registered today), and separately injects a runtime-state
+  `<system-reminder>` (current time, pending tasks) as its own context
+  message rather than into the prompt string, so prompt caching on the
+  fixed text still works. See CLAUDE.md's "System Prompt 的实际组装方式"
+  section before changing prompt wording or debugging "the model doesn't
+  know X". That runtime-state hint currently has no case in
+  `AgentEventTranslator` and is silently dropped rather than surfaced to
+  the frontend.
 - **Artifact detection is mtime-based, not tool-hook-based**: after each
   turn's `ReplyEndEvent`, `server/main.py`'s `_new_artifact_frames()` scans
   the task's workspace directory for files modified since the turn started

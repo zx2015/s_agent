@@ -212,6 +212,58 @@ async for event in agent.reply_stream(msg):
 
 详细调研记录：[.learnings/knowledge/litellm-vflash-integration.md](.learnings/knowledge/litellm-vflash-integration.md)
 
+### ⭐ System Prompt 的实际组装方式（2026-09-30 调研，AgentScope 2.0.8）
+
+发给模型的"系统提示词"**不是** `server/agent/core.py` 里 `SYSTEM_PROMPT_TEMPLATE` 那段字符串本身，而是 AgentScope 在每次 `reply_stream()` 时动态拼出来的三层结构。写新工具、调 System Prompt 措辞、或排查"模型为什么不知道某件事"之前，必须理解这三层：
+
+**第 1 层 —— 项目自己写的固定模板（`server/agent/core.py`）**
+
+```python
+SYSTEM_PROMPT_TEMPLATE = (
+    "你是 s_agent 工作台里的通用任务助手。你的工作区目录是：\n"
+    "{workspace_dir}\n"
+    ...
+)
+```
+
+每个任务第一次发消息时，`build_agent(workspace_dir)` 用该任务的实际工作区绝对路径填充一次 `{workspace_dir}`，传给 `Agent(system_prompt=...)`。**每个任务独立一份，创建时确定，之后不变。**
+
+**第 2 层 —— AgentScope 每轮回复时动态拼接（`Agent._get_system_prompt()`，`agentscope/agent/_agent.py`）**
+
+```python
+prompt = [self._system_prompt]                         # 第1层
+prompt.append(await toolkit.get_skill_instructions(...))   # 工具包"技能"说明
+prompt.append(await offloader.get_instructions())           # 记忆卸载器说明
+result = "\n".join(prompt)
+# 再经过任意已注册的 system_prompt middleware 依次转换
+```
+
+本项目目前**没有**注册任何工具技能（skill）、自定义 offloader 或 system_prompt middleware，所以这两项目前为空、这一层实际等于第 1 层原样。但这是可扩展点：以后给 Toolkit 挂技能说明、或换成自定义记忆卸载策略，会自动拼进去，不需要改 `SYSTEM_PROMPT_TEMPLATE` 本身。
+
+**第 3 层 —— 运行时状态提醒，注意：不进 system prompt 字符串，是独立的上下文消息**
+
+`InjectionConfig.inject_runtime_state` 默认 `True`（本项目未覆盖，走默认值），AgentScope 在每轮回复开始时会往**对话上下文**（`self.state.context`，不是 system prompt）追加一条 `<system-reminder>` 消息，内容包含：
+- 当前时间（`InjectionConfig.timezone` 默认 `UTC`，本项目未改成 `Asia/Shanghai`）
+- 待办任务列表（若用了 `TaskCreate`/`TaskList` 建过任务）
+- 上下文长度接近压缩阈值时的提醒
+
+官方注释原话："We attach a `HintBlock` instead of mutating the system prompt, so that prompt caching still works" —— 故意不塞进 system prompt 字符串，是为了让 system prompt 本体保持不变，方便模型服务商做 prompt caching。
+
+⚠️ **已知缺口**：这个 `HintBlockEvent` 目前 `server/service/events.py` 的 `AgentEventTranslator.translate()` 没有对应分支，会落入默认 `return []` 被静默丢弃——即它确实影响了模型看到的内容，但不会转成任何 SSE 帧显示给前端用户。
+
+**最终发给模型 API 的实际结构**：
+
+```python
+messages = [
+    SystemMsg(第1+2层拼好的字符串),
+    UserMsg(压缩摘要，仅发生过上下文压缩后才有),
+    *self.state.context,   # 历史对话 + 第3层插入的 <system-reminder> 消息
+]
+tools = await toolkit.get_tool_schemas(...)  # 12 个工具的 JSON Schema，走 OpenAI API 的独立 tools 字段，不占用文本
+```
+
+也就是说模型实际看到的完整指令 = 固定系统提示词（项目写的）+ 动态运行时提醒（框架自动插入，独立消息）+ 工具函数签名（走 API 结构化字段，完全不占文本篇幅）。
+
 ---
 
 ## 核心行为准则（继承全局与本地最佳实践）

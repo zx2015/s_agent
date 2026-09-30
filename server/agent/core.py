@@ -39,6 +39,14 @@ from agentscope.tool import (
 from server import config
 from server.tools.calculator import calculate
 
+# This is only layer 1 of what the model actually receives as its system
+# prompt — AgentScope appends toolkit skill/offloader instructions on top
+# of this string every reply, and separately injects a runtime-state
+# `<system-reminder>` (current time, pending tasks, ...) as its own
+# context message rather than into this string at all (so prompt caching
+# on this fixed text keeps working). See CLAUDE.md's "System Prompt 的实际
+# 组装方式" section for the full three-layer breakdown before changing
+# this or debugging "the model doesn't know X".
 SYSTEM_PROMPT_TEMPLATE = (
     "你是 s_agent 工作台里的通用任务助手。你的工作区目录是：\n"
     "{workspace_dir}\n"
