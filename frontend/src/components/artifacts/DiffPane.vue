@@ -69,7 +69,7 @@ watch(() => props.taskId, reload)
 
 .diff-hint {
   margin-left: auto;
-  color: #86909c;
+  color: var(--color-text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -86,7 +86,7 @@ watch(() => props.taskId, reload)
 
 .empty {
   text-align: center;
-  color: #86909c;
+  color: var(--color-text-muted);
   font-size: 12px;
   margin-top: 24px;
 }

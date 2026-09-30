@@ -1,7 +1,7 @@
 <template>
   <div class="app-shell">
     <header class="top-bar">
-      <span class="brand">s_agent 工作台</span>
+      <span class="brand">MateChat</span>
       <span v-if="workspace.activeTask" class="active-task">
         {{ workspace.activeTask.title }}
       </span>
@@ -56,7 +56,7 @@ onMounted(() => {
 
 .active-task {
   font-size: 12px;
-  color: #86909c;
+  color: var(--color-text-muted);
 }
 
 .app-body {

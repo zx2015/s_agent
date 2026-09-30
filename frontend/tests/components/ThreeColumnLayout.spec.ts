@@ -19,7 +19,7 @@ describe('App shell (three-column workbench)', () => {
 
   it('renders the top bar and the three panes', () => {
     const wrapper = mount(App)
-    expect(wrapper.text()).toContain('s_agent 工作台')
+    expect(wrapper.text()).toContain('MateChat')
     expect(wrapper.find('.sidebar-left').exists()).toBe(true)
     expect(wrapper.find('.sidebar-middle').exists()).toBe(true)
   })

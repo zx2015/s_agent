@@ -4,6 +4,12 @@
   --topbar-height: 48px;
   --color-border: #e5e6eb;
   --color-bg-subtle: #f7f8fa;
+  --color-text: #1d2129;
+  --color-text-secondary: #4e5969;
+  /* Was #86909c (≈2.9:1 contrast on white) — too light to read
+     comfortably. #57606a keeps the same "muted/secondary" role but
+     clears the WCAG AA 4.5:1 threshold for normal-size text. */
+  --color-text-muted: #57606a;
 }
 
 * {
@@ -20,5 +26,5 @@ body,
 }
 
 body {
-  color: #1d2129;
+  color: var(--color-text);
 }

@@ -26,6 +26,43 @@ export function useChat() {
   const abortController = ref<AbortController | null>(null)
 
   /**
+   * Make sure a task is selected before running a turn, creating one on
+   * the fly if the user never picked one from the sidebar.
+   *
+   * Without this, sending a message with no active task silently did
+   * nothing beyond echoing the user's own bubble — `send()` used to
+   * return right after the `if (!taskId) return` check, before ever
+   * calling the backend. Auto-creating a task here means "just type and
+   * send" works the same way it would in a chat product that doesn't
+   * force the user to create a project first.
+   *
+   * @returns The task id to run against, or `null` if creation failed
+   *   (e.g. the backend is unreachable).
+   */
+  async function ensureActiveTask(): Promise<string | null> {
+    if (workspace.activeTaskId) return workspace.activeTaskId
+
+    const workspaceId = workspace.workspaces[0]?.id ?? 'default'
+
+    if (USE_MOCK) {
+      if (!workspace.workspaces.some((item) => item.id === workspaceId)) {
+        workspace.setWorkspaces([{ id: workspaceId, name: '默认工作区', tasks: [] }])
+      }
+      const task = workspace.createTask(workspaceId, '新任务')
+      workspace.selectTask(task.id)
+      return task.id
+    }
+
+    try {
+      const task = await workspace.createTaskRemote(workspaceId, '新任务')
+      workspace.selectTask(task.id)
+      return task.id
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Send one message and stream the reply into the session store.
    *
    * @param message - The user's message.
@@ -33,14 +70,25 @@ export function useChat() {
   async function send(message: string): Promise<void> {
     if (session.isStreaming) return
 
-    // Record the user's turn before checking for a task, so the transcript
-    // shows what was typed even if there is nowhere to run it.
+    // Record the user's turn before resolving a task, so the transcript
+    // shows what was typed even if task creation ends up failing.
     session.addUserMessage(message)
 
-    const taskId = workspace.activeTaskId
-    if (!taskId) return
+    const taskId = await ensureActiveTask()
 
     session.beginAssistantTurn()
+
+    if (!taskId) {
+      session.applyFrame({
+        event: 'text_delta',
+        data: { text: '无法创建任务，请确认后端服务是否已启动。' },
+      } as never)
+      session.applyFrame({
+        event: 'done',
+        data: { task_status: 'failed' },
+      } as never)
+      return
+    }
 
     if (USE_MOCK) {
       const noWait = () => Promise.resolve()

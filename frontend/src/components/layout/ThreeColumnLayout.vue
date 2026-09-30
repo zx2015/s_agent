@@ -113,7 +113,7 @@ function onResize(payload: SplitpanesResizePayload): void {
   font-size: 10px;
   z-index: 10;
   padding: 0;
-  color: #86909c;
+  color: var(--color-text-muted);
 }
 
 .toggle-left {

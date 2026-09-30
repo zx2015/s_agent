@@ -32,13 +32,13 @@ const expanded = ref(false)
   border: none;
   cursor: pointer;
   font-size: 12px;
-  color: #86909c;
+  color: var(--color-text-muted);
   padding: 2px 0;
 }
 
 .char-count {
   font-size: 11px;
-  color: #c9cdd4;
+  color: var(--color-text-muted);
 }
 
 .thinking-text {

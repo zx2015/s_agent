@@ -150,7 +150,7 @@ const hitlOptions: Array<{ value: HitlMode; label: string }> = [
 
 .hint {
   font-size: 12px;
-  color: #86909c;
+  color: var(--color-text-muted);
 }
 
 .icon-button {

@@ -47,13 +47,46 @@ describe('useChat', () => {
     expect(session.messages[1].role).toBe('assistant')
   })
 
-  it('requires an active task', async () => {
+  it('auto-creates and selects a task when none is active', async () => {
+    // Sending with no active task used to only echo the user's bubble and
+    // stop — this proves it now creates a task via the backend first.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'auto-1',
+          title: '新任务',
+          workspaceId: 'default',
+          status: 'running',
+          updatedAt: '',
+          hasArtifacts: false,
+        }),
+      }),
+    )
+
+    const workspace = useWorkspaceStore()
     const session = useSessionStore()
     const { send } = useChat()
     await send('你好')
-    // Without a task there is nowhere to run, so only the user message
-    // is recorded and no turn is opened.
-    expect(session.messages).toHaveLength(1)
+
+    expect(workspace.activeTaskId).toBe('auto-1')
+    expect(session.messages[0].role).toBe('user')
+    expect(session.messages[1].role).toBe('assistant')
+  })
+
+  it('reports an error in the transcript when task auto-creation fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')))
+
+    const workspace = useWorkspaceStore()
+    const session = useSessionStore()
+    const { send } = useChat()
+    await send('你好')
+
+    expect(workspace.activeTaskId).toBeNull()
+    expect(session.messages[1].text).toContain('无法创建任务')
+    expect(session.isStreaming).toBe(false)
   })
 
   it('does not send while a turn is already streaming', async () => {

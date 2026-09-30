@@ -70,7 +70,7 @@ const argsPreview = computed(() => {
 
 .tool-status {
   margin-left: auto;
-  color: #86909c;
+  color: var(--color-text-muted);
 }
 
 .status-success .tool-icon {

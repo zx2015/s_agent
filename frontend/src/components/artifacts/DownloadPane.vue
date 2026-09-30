@@ -110,7 +110,7 @@ function iconFor(type: Artifact['type']): string {
 
 .empty {
   text-align: center;
-  color: #86909c;
+  color: var(--color-text-muted);
   font-size: 12px;
   margin-top: 24px;
 }

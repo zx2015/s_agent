@@ -21,6 +21,8 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+# 本机端口冲突时的临时 Vite 覆盖配置（见 frontend 目录内注释），仅用于单机联调
+frontend/vite.config.local.ts
 
 # 日志与临时工作区
 *.log

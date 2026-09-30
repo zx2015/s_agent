@@ -87,7 +87,7 @@ watch(() => props.taskId, loadFiles)
 
 .empty {
   text-align: center;
-  color: #86909c;
+  color: var(--color-text-muted);
   font-size: 12px;
   margin-top: 24px;
 }

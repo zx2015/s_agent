@@ -86,7 +86,7 @@ const active = computed(() => props.artifact)
 
 .empty {
   margin: 40px auto;
-  color: #86909c;
+  color: var(--color-text-muted);
   font-size: 13px;
 }
 

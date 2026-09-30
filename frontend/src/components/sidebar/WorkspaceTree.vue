@@ -78,7 +78,7 @@ function toggle(workspaceId: string): void {
   padding: 6px 8px;
   cursor: pointer;
   font-size: 12px;
-  color: #86909c;
+  color: var(--color-text-muted);
   text-transform: uppercase;
 }
 
@@ -151,12 +151,12 @@ function toggle(workspaceId: string): void {
 
 .artifact-badge {
   font-size: 11px;
-  color: #86909c;
+  color: var(--color-text-muted);
 }
 
 .empty {
   font-size: 12px;
-  color: #86909c;
+  color: var(--color-text-muted);
   text-align: center;
   padding: 16px 0;
 }
