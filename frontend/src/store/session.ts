@@ -12,6 +12,7 @@
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { apiClient } from '@/api/client'
 import type { ParsedFrame } from '@/api/events'
 import type { Artifact, ChatMessage, PendingConfirm } from '@/types'
 
@@ -193,6 +194,27 @@ export const useSessionStore = defineStore('session', () => {
     insideThink.value = false
   }
 
+  /**
+   * Hydrate the middle pane from the backend transcript for a task.
+   *
+   * Called by the sidebar when the user switches tasks. Without this,
+   * clicking from task A to task B would leave A's bubbles on screen
+   * while the next user message lands on B's model context — a clear
+   * disconnect between what the user sees and what the agent sees.
+   */
+  async function loadHistory(taskId: string): Promise<void> {
+    reset()
+    try {
+      const response = await apiClient.get<{ messages: ChatMessage[] }>(
+        `/api/tasks/${taskId}/messages`,
+      )
+      messages.value = response.messages ?? []
+    } catch {
+      // A failed hydrate must not break the session: start clean.
+      messages.value = []
+    }
+  }
+
   return {
     messages,
     artifacts,
@@ -204,5 +226,6 @@ export const useSessionStore = defineStore('session', () => {
     applyFrame,
     resolveConfirm,
     reset,
+    loadHistory,
   }
 })

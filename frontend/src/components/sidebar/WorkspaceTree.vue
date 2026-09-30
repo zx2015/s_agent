@@ -33,7 +33,7 @@
         class="task-list"
         :variant="ListVariant.Transparent"
         :data="toListItems(workspace.tasks)"
-        @select="(item) => store.selectTask(String(item.value))"
+        @select="onSelectTask"
       >
         <template #item="{ item }">
           <div
@@ -123,9 +123,29 @@ function toggle(workspaceId: string): void {
  * which still does that for a quick default). `@click.stop` keeps this
  * from also toggling the group's collapse state.
  */
+async function onSelectTask(item: { value: string | number }): Promise<void> {
+  const taskId = String(item.value)
+  if (store.activeTaskId === taskId) return
+  store.selectTask(taskId)
+  // Hydrate the middle pane with this task's persisted conversation history
+  // from the backend. Without this, the bubbles from the previously active
+  // task would linger on screen while the backend runs against the new task's
+  // context — a major visual disconnect.
+  await session.loadHistory(taskId)
+}
+
+/**
+ * Targets a task at a specific workspace — the direct answer to "how do
+ * I pick which workspace a new task goes into": click "+" on that
+ * workspace's own row, rather than always landing in whichever workspace
+ * happens to be first (see `SidebarLeft.vue`'s top-level "+ 新建任务",
+ * which still does that for a quick default). `@click.stop` keeps this
+ * from also toggling the group's collapse state.
+ */
 async function onNewTaskClick(workspaceId: string): Promise<void> {
   const task = await store.createTaskRemote(workspaceId, '新任务')
   store.selectTask(task.id)
+  session.reset()
 }
 
 /**
@@ -141,7 +161,9 @@ async function onDeleteClick(taskId: string, title: string): Promise<void> {
 
   const wasActive = store.activeTaskId === taskId
   await store.deleteTaskRemote(taskId)
-  if (wasActive) session.reset()
+  if (wasActive) {
+    session.reset()
+  }
 }
 
 /**

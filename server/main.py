@@ -29,6 +29,8 @@ from server.schemas.chat import (
     WorkspaceOut,
 )
 from server.service.events import AgentEventTranslator, sse_frame
+from server.service.history import agent_state_to_chat_messages
+from server.service.memory_store import agent_state_store
 from server.service.task_manager import task_manager
 from server.service.title_generator import generate_title
 
@@ -107,6 +109,22 @@ async def delete_task(task_id: str) -> dict:
     if not deleted:
         raise HTTPException(status_code=404, detail="task not found")
     return {"ok": True}
+
+
+@app.get("/api/tasks/{task_id}/messages")
+async def get_task_messages(task_id: str) -> dict:
+    """Hydrate the middle pane when the user switches tasks.
+
+    The AgentScope `AgentState.context` already holds the full transcript;
+    this endpoint serialises it into the `ChatMessage` shape that the
+    frontend's session store consumes. When no agent state exists (the
+    task has never been chatted with), returns an empty list rather than
+    a 404 — a missing transcript is not an error, it's just blank.
+    """
+    if task_manager.get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    state = await agent_state_store.load(task_id)
+    return {"messages": agent_state_to_chat_messages(state)}
 
 
 @app.post("/api/chat")

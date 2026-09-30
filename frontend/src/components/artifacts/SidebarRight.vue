@@ -12,7 +12,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { McLayoutAside } from '@matechat/core'
 import ArtifactTabs, { type ArtifactTabId } from './ArtifactTabs.vue'
 import PreviewPane from './PreviewPane.vue'
@@ -29,6 +29,14 @@ const activeTab = ref<ArtifactTabId>('preview')
 
 const taskId = computed(() => workspace.activeTaskId)
 const activeArtifact = computed(() => session.artifacts[0] ?? null)
+
+// Reset the active tab back to Preview whenever the user switches (or
+// deletes) the active task. Without this, switching from a task where
+// the user was looking at "Diff" to a new task would leave the right
+// pane stuck on Diff showing nothing useful.
+watch(taskId, () => {
+  activeTab.value = 'preview'
+})
 </script>
 
 <style scoped>

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore } from '@/store/session'
 import type { ParsedFrame } from '@/api/events'
@@ -184,5 +184,95 @@ describe('session store', () => {
     const store = useSessionStore()
     store.applyFrame(frame('text_delta', { text: '孤儿' }))
     expect(store.messages).toHaveLength(0)
+  })
+
+  describe('loadHistory', () => {
+    beforeEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('replaces the current transcript with the server response', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            messages: [
+              { id: 'h1', role: 'user', text: '旧用户', thinking: '', toolCalls: [], streaming: false },
+              {
+                id: 'h2',
+                role: 'assistant',
+                text: '旧回答',
+                thinking: '旧思考',
+                toolCalls: [],
+                streaming: false,
+              },
+            ],
+          }),
+        }),
+      )
+      const store = useSessionStore()
+      store.addUserMessage('当前会话的临时消息')
+      store.applyFrame(frame('text_delta', { text: '临时回答' }))
+
+      await store.loadHistory('t1')
+
+      expect(store.messages).toHaveLength(2)
+      expect(store.messages[0].text).toBe('旧用户')
+      expect(store.messages[1].text).toBe('旧回答')
+      expect(store.messages[1].thinking).toBe('旧思考')
+      expect(store.isStreaming).toBe(false)
+    })
+
+    it('clears the conversation when the endpoint returns no messages', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ messages: [] }),
+        }),
+      )
+      const store = useSessionStore()
+      store.addUserMessage('占位')
+
+      await store.loadHistory('t1')
+
+      expect(store.messages).toEqual([])
+      expect(store.pendingConfirm).toBeNull()
+    })
+
+    it('falls back to an empty transcript when the endpoint errors', async () => {
+      // A failed hydrate must not leave the UI in a half-loaded state.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          text: async () => 'boom',
+        }),
+      )
+      const store = useSessionStore()
+      store.addUserMessage('占位')
+
+      await store.loadHistory('t1')
+
+      expect(store.messages).toEqual([])
+    })
+
+    it('targets the right URL', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ messages: [] }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const store = useSessionStore()
+      await store.loadHistory('abc')
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/tasks/abc/messages',
+        expect.objectContaining({ headers: expect.any(Object) }),
+      )
+    })
   })
 })
