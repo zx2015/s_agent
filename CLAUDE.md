@@ -264,6 +264,16 @@ tools = await toolkit.get_tool_schemas(...)  # 12 个工具的 JSON Schema，走
 
 也就是说模型实际看到的完整指令 = 固定系统提示词（项目写的）+ 动态运行时提醒（框架自动插入，独立消息）+ 工具函数签名（走 API 结构化字段，完全不占文本篇幅）。
 
+### ⭐ 会话历史持久化（2026-09-30，AgentScope 2.0.8）
+
+`server/service/memory_store.py` 用本地 Redis 容器（端口 6380）持久化每个任务的对话历史，跨后端进程重启存活（已用 `kill -9` 验证）。核心机制：
+
+- 持久化单元是 `agentscope.state.AgentState`——一个纯 pydantic `BaseModel`，包含 `context`（完整消息历史）、`summary`（压缩摘要）等全部子上下文。`agent.state.model_dump_json()` / `AgentState.model_validate_json(...)` 可以直接序列化/反序列化，`Agent(state=...)` 构造参数直接接受恢复后的对象——**不需要自己拼消息列表**，这是 AgentScope 官方 Redis/SQL 存储后端（`agentscope.app.storage`）内部用的同一套机制。
+- 只在 `ReplyEndEvent`（整轮真正结束）时保存，不在工具调用等待 HITL 确认期间保存——否则恢复出来的状态会包含"工具调用发出了但没有结果"，`reply_stream()` 对着这种状态会直接抛错（`"Agent is waiting for N tool calls ... but received no event"`）。
+- 保存失败要"尽力而为"（记日志不抛出）——因为保存发生在该轮的 SSE 帧（含 `done`）已经发给前端**之后**，抛出去只会导致外层 except 再补发一个多余的 `done`/错误帧。加载失败则相反，直接往外抛，交给已有的"缺 API key"式优雅降级处理——历史读取失败应该让用户看到明确报错，而不是默默当成"没有历史"。
+
+⚠️ **官方在线文档 `doc.agentscope.io` 的 State/Session Management 页面与本地实际安装的 2.0.8 源码完全对不上**：文档描述的是 `StateModule` / `agent.state_dict()` / `agent.load_state_dict()` / `agentscope.session.JSONSession` 这套 API，但本地安装（`/media/data/git/agentscope/src/agentscope`，editable 模式）里 `agentscope.session` 模块根本不存在（`import` 直接报 `ModuleNotFoundError`），`Agent` 也没有 `state_dict()` 方法。遇到类似情况——**以本地实际安装的源码为准，别信在线文档**，这也是本项目从 1.0.21 升级到 2.0 时已经踩过的同一类坑（见上文"后端 AgentScope 版本契约"）。
+
 ---
 
 ## 核心行为准则（继承全局与本地最佳实践）

@@ -21,6 +21,7 @@ from agentscope.credential import OpenAICredential
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope.model import OpenAIChatModel
 from agentscope.permission import PermissionBehavior, PermissionDecision
+from agentscope.state import AgentState
 from agentscope.tool import (
     AskUser,
     Bash,
@@ -116,7 +117,7 @@ def _build_environment_block(workspace_dir: Path) -> str:
     return "\n".join(lines)
 
 
-async def build_agent(workspace_dir: Path) -> Agent:
+async def build_agent(workspace_dir: Path, state: AgentState | None = None) -> Agent:
     """Assemble the toolkit and the model-backed agent for one task.
 
     Args:
@@ -124,6 +125,10 @@ async def build_agent(workspace_dir: Path) -> Agent:
             tools operate relative to this path via a dedicated
             `LocalBackend`, so tasks cannot see or touch each other's
             files.
+        state: A previously saved `AgentState` to resume from (see
+            `server/service/memory_store.py`). When `None`, the agent
+            starts with empty conversation history, same as before
+            persistence existed.
     """
     workspace_dir.mkdir(parents=True, exist_ok=True)
     resolved_dir = str(workspace_dir.resolve())
@@ -179,4 +184,5 @@ async def build_agent(workspace_dir: Path) -> Agent:
         ),
         model=model,
         toolkit=toolkit,
+        state=state,
     )

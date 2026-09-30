@@ -115,12 +115,14 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                             turn_started_at,
                         ):
                             yield frame
+                        await task_manager.save_agent_state(payload.task_id)
                         return
 
                 if pending_reply_id is None:
                     # The stream ended without a ReplyEndEvent or a confirm
                     # request — close the turn defensively rather than
                     # hanging the connection open.
+                    await task_manager.save_agent_state(payload.task_id)
                     yield sse_frame("done", {"task_status": "completed"})
                     return
 

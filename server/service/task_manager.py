@@ -1,12 +1,16 @@
 """
 In-process registry of workspaces, tasks, and their running agents.
 
-Everything here lives for the lifetime of the FastAPI process except the
-workspace/task list itself, which is mirrored to a small JSON file under
-`config.WORKSPACES_ROOT` (gitignored, see `.gitignore`'s `workspaces/`
-entry) so a dev-server reload does not wipe the sidebar. Conversation
-history is intentionally *not* persisted — memory persistence across
-restarts is `TODO.md`'s "四大记忆机制" item, not yet built.
+Task/workspace *metadata* (id/title/status/timestamps) is mirrored to a
+small JSON file under `config.WORKSPACES_ROOT` (gitignored, see
+`.gitignore`'s `workspaces/` entry) so a dev-server reload does not wipe
+the sidebar. Conversation *history* is a separate concern, persisted to
+Redis via `server/service/memory_store.py` (one `AgentState` per task,
+saved after each completed turn) — see that module's docstring for why
+Redis, why `AgentState`, and why only on `ReplyEndEvent`. Before that
+existed, a backend restart silently wiped every task's memory while the
+sidebar still showed the task as if nothing happened; that gap is what
+`AgentStateStore` closes.
 
 The confirm/resume mechanism is the interesting part: AgentScope's
 `reply_stream` yields `RequireUserConfirmEvent` and then simply ends —
@@ -20,6 +24,7 @@ it.
 """
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +33,9 @@ from agentscope.agent import Agent
 
 from server import config
 from server.agent.core import build_agent
+from server.service.memory_store import agent_state_store
+
+logger = logging.getLogger(__name__)
 from server.schemas.chat import now_iso
 
 _REGISTRY_FILE = config.WORKSPACES_ROOT / "registry.json"
@@ -155,8 +163,48 @@ class TaskManager:
 
     async def get_or_create_agent(self, task_id: str) -> Agent:
         if task_id not in self._agents:
-            self._agents[task_id] = await build_agent(self.workspace_dir(task_id))
+            saved_state = await agent_state_store.load(task_id)
+            self._agents[task_id] = await build_agent(
+                self.workspace_dir(task_id),
+                state=saved_state,
+            )
         return self._agents[task_id]
+
+    async def save_agent_state(self, task_id: str) -> None:
+        """Persist the task's current conversation history.
+
+        Called once per completed turn (`ReplyEndEvent`, see
+        `server/main.py`) rather than after every SSE frame — see
+        `memory_store.py`'s docstring for why mid-turn snapshots (e.g.
+        while a tool call awaits HITL confirmation) are deliberately
+        avoided. A no-op if the agent was never built for this task
+        (e.g. `/api/chat` was never called), so callers don't need to
+        guard the call themselves.
+
+        Failures here are logged, not raised: by the time this runs, the
+        turn's SSE frames — including the `done` frame the translator
+        emits for `ReplyEndEvent` — have already been sent to the client,
+        so letting a Redis hiccup propagate would only make `main.py`'s
+        outer `except Exception` send a second, spurious `done`/error
+        frame after an otherwise-successful reply. `get_or_create_agent`'s
+        *load* deliberately does NOT get this same treatment — a failure
+        to read history when a conversation is starting is worth
+        surfacing to the user as a real error, not silently proceeding as
+        if there had never been any history at all.
+        """
+        agent = self._agents.get(task_id)
+        if agent is None:
+            return
+        try:
+            await agent_state_store.save(task_id, agent.state)
+        except Exception:  # noqa: BLE001 - best-effort, see docstring
+            logger.warning(
+                "Failed to persist conversation history for task %s; "
+                "this turn's reply already reached the client, so "
+                "continuing without persisting it rather than erroring.",
+                task_id,
+                exc_info=True,
+            )
 
     # --- HITL confirm bridge ---------------------------------------------------
 

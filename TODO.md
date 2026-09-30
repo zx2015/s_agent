@@ -6,13 +6,13 @@
 - （无）
 
 ## 待办
-- [ ] 实现四大记忆机制：上下文注入 / 压缩 / 卸载 / 长期记忆 — 优先级：高（阶段一 spec 模块 D）
+- [ ] 实现"卸载"（offload）与"长期记忆"（跨任务 RAG 知识库）—— 四大记忆机制里剩下的两项；"上下文注入"与"压缩"其实是 AgentScope 默认就自带的（`InjectionConfig`/`ContextConfig` 未做任何定制，走的是框架默认值），已在会话历史持久化那条里连带记录，不再单列 — 优先级：中（阶段一 spec 模块 D）
+- [ ] 校准 `OpenAIChatModel(context_size=...)`：目前用的是 AgentScope 默认值 128000 token，未针对 `v-flash` 实际上下文窗口校正，影响自动压缩的触发时机 — 优先级：中
 - [ ] 实现 HITL 权限引擎的精细化规则（当前仅接入 AgentScope 内置 Bash/Write/Edit 危险模式检测的 ASK 行为，未做自定义黑名单/白名单）— 优先级：中（阶段一 spec 模块 E）
 - [ ] 移植股票分析项目 calculator.py 的完整功能（当前 `server/tools/calculator.py` 只是一个受限 AST 四则运算求值器，未覆盖股票场景的 Sharpe/回撤等函数）— 优先级：中
 - [ ] 跑通"通用 Agent"端到端最小闭环后，再规划股票分析改造 — 优先级：中（依赖真实 key 验证）
 - [ ] 评估复用 `/media/data/git/股票分析/scripts/tencent_stock.py` 作为 Toolkit 工具 — 优先级：低（阶段二）
 - [ ] 设计 portfolio JSON 读写工具（遵守无引号规范）— 优先级：低（阶段二）
-- [ ] 会话历史持久化：当前 `TaskManager` 只持久化工作区/任务元数据（`workspaces/registry.json`），对话历史和 `Agent` 实例随进程重启丢失 — 优先级：中
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
 
 ## 已完成
@@ -52,4 +52,12 @@
   - `MessageList.vue` 空状态：`McIntroduction` + `McPrompt` 建议提示词，点击直接调用 `useChat().send()` 运行
   - 新增 `frontend/tests/setup.ts` 全局 stub `ResizeObserver`（jsdom 未实现，`McLayoutContent` 无条件构造它）
   - 前端 89 tests passed，typecheck 干净，prod build 验证通过
+- [x] System Prompt 扩展 + 会话历史持久化（Redis）— 2026-09-30
+  - `server/agent/core.py`：System Prompt 新增 GFM 渲染说明 / 权限模式与拒绝调用处理 / `<system-reminder>` 与工具中间件来源说明 / 动态检测的 `<env>` 环境信息块（工作目录、是否 git 仓库、平台、真实 shell——发现 AgentScope 的 Bash 工具其实是用 `/bin/sh -c` 而非字面 bash 执行命令，通过解析 `/bin/sh` 符号链接目标如实上报、内核版本、模型名）
+  - 调研确认：AgentScope 官方在线文档（`doc.agentscope.io`）描述的 `StateModule`/`agent.state_dict()`/`agentscope.session.JSONSession` 与本地实际安装的 2.0.8 源码完全对不上（已验证 `agentscope.session` 模块根本不存在）；改为直接读本地已安装源码 + 实测验证，确认真正的机制是 `agentscope.state.AgentState`（纯 pydantic BaseModel）+ `Agent(state=...)` 构造参数，且这正是 AgentScope 自己的 Redis/SQL 存储后端（`agentscope.app.storage`）内部使用的同一持久化单元
+  - 新增 `server/service/memory_store.py`：`AgentStateStore`，用已有的本地 Redis 容器（端口 6380）保存/加载每个任务的 `AgentState`，key 为 `s_agent:agent_state:{task_id}`，TTL 30 天（可配），加载校验失败时优雅降级为全新会话而非报错
+  - `task_manager.get_or_create_agent()` 冷启动时先尝试从 Redis 加载；只在 `ReplyEndEvent`（整轮真正结束）时保存，不在工具调用等待 HITL 确认期间保存——避免恢复出"工具调用发出了但没有结果"的不一致状态（AgentScope 会对这种状态直接抛错）
+  - 真实验证：发消息让模型记住一个数字 → `kill -9` 粗暴杀死后端进程（非优雅关闭）→ 全新进程启动，内存缓存完全为空 → 直接问该任务"之前的数字是多少" → 正确答对，证明历史确实从 Redis 恢复
+  - `save_agent_state` 做成"尽力而为"：持久化失败只记日志不抛出（此时该轮回复的 SSE 帧、含 `done`，已经发给前端了，抛出去只会让 `main.py` 外层 except 再发一个多余的 `done`/错误帧）；`get_or_create_agent` 的加载失败则保留原样往外抛——历史读取失败应该让用户看到明确报错，而不是悄悄当作"没有历史"
+  - 新增 `tests/test_system_prompt.py`（6 个）+ `tests/test_memory_store.py`（5 个，真实连接本地 Redis）+ `tests/test_task_manager.py`（2 个）；后端测试从 17 增至 24 全部通过
 

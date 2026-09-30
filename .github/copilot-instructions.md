@@ -118,6 +118,23 @@ that span multiple files:
   `Grep`/`AskUser`/`TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` as
   built-ins; only `server/tools/calculator.py` (a restricted-AST arithmetic
   evaluator, per `CLAUDE.md`'s "严禁心算" rule) is project-specific.
+- **Conversation history survives a backend restart**: `TaskManager._agents`
+  is only an in-process cache — `server/service/memory_store.py`'s
+  `AgentStateStore` persists each task's `agentscope.state.AgentState` (a
+  plain pydantic model covering the full message history, compression
+  summary, and tool/task/permission sub-contexts) to the local Redis
+  container after every completed turn (`ReplyEndEvent`, not mid-turn —
+  see that module's docstring for why a snapshot taken while a tool call
+  awaits HITL confirmation would be internally inconsistent on restore).
+  `get_or_create_agent()` loads it back on a cold task id via
+  `Agent(state=...)`. Verified end-to-end by `kill -9`'ing the backend and
+  confirming a brand-new process answers questions about what was said
+  before the restart. Don't trust `doc.agentscope.io`'s state-management
+  page for this — it describes a `StateModule`/`agent.state_dict()`/
+  `agentscope.session.JSONSession` API that doesn't exist in the installed
+  2.0.8 source (`agentscope.session` isn't even an importable module);
+  check the installed package under AgentScope's repo checkout instead of
+  the hosted docs when they disagree.
 - **The system prompt sent to the model is not just
   `SYSTEM_PROMPT_TEMPLATE`**: AgentScope assembles it in three layers at
   reply time (our fixed string + toolkit skill/offloader instructions +

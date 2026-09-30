@@ -34,3 +34,17 @@ ALLOWED_ORIGINS = os.getenv(
     "S_AGENT_ALLOWED_ORIGINS",
     "http://127.0.0.1:5173,http://localhost:5173",
 ).split(",")
+
+# --- Conversation history persistence ---
+# Backed by the local Redis container (see CLAUDE.md's environment notes;
+# host port 6380, no password). Each task's AgentState is stored as one
+# key so a backend restart doesn't wipe conversation history the way an
+# in-memory-only TaskManager._agents cache does — see
+# server/service/memory_store.py.
+REDIS_URL = os.getenv("S_AGENT_REDIS_URL", "redis://127.0.0.1:6380/0")
+# How long a task's saved conversation survives with no activity before
+# Redis evicts it. Refreshed on every save, so only genuinely abandoned
+# tasks expire.
+AGENT_STATE_TTL_SECONDS = int(
+    os.getenv("S_AGENT_STATE_TTL_DAYS", "30"),
+) * 86400
