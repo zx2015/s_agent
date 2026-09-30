@@ -18,6 +18,7 @@ from agentscope.agent import Agent
 from agentscope.credential import OpenAICredential
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope.model import OpenAIChatModel
+from agentscope.permission import PermissionBehavior, PermissionDecision
 from agentscope.tool import (
     AskUser,
     Bash,
@@ -73,7 +74,20 @@ async def build_agent(workspace_dir: Path) -> Agent:
     await toolkit.add_tool(TaskGet())
     await toolkit.add_tool(TaskList())
     await toolkit.add_tool(TaskUpdate())
-    await toolkit.add_tool(FunctionTool(calculate))
+    # `FunctionTool` asks for confirmation on every call unless a permission
+    # is given explicitly (see agentscope/tool/_adapters.py) — safe default
+    # for arbitrary custom tools, but wrong for calculate: it is a pure,
+    # side-effect-free AST evaluator with no filesystem/network access, so
+    # forcing a HITL prompt for "what's 2+2" would just be noise.
+    await toolkit.add_tool(
+        FunctionTool(
+            calculate,
+            permission=PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message="Pure arithmetic evaluation, no side effects",
+            ),
+        ),
+    )
 
     credential = OpenAICredential(
         id="litellm-vflash",

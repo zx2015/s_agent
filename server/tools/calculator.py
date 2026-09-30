@@ -14,9 +14,6 @@ crafted expression.
 import ast
 import operator
 
-from agentscope.tool import ToolResponse
-from agentscope.message import TextBlock
-
 _ALLOWED_BINOPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -45,7 +42,7 @@ def _eval_node(node: ast.AST) -> float:
     raise ValueError(f"Unsupported expression element: {ast.dump(node)}")
 
 
-def calculate(expression: str) -> ToolResponse:
+def calculate(expression: str) -> str:
     """Evaluate a precise arithmetic expression and return the exact result.
 
     Always call this for any arithmetic beyond trivial single-digit facts —
@@ -58,14 +55,17 @@ def calculate(expression: str) -> ToolResponse:
             A Python-style arithmetic expression, e.g. `"(153.2 - 100) /
             100 * 100"`. Supports `+ - * / // % **` and parentheses only.
     """
+    # A plain `str` return is intentional: FunctionTool's adapter
+    # (agentscope/tool/_adapters.py) only special-cases `ToolChunk`, `str`,
+    # or JSON-serializable data for a wrapped function's return value —
+    # returning `ToolResponse` here (a *different*, unrelated pydantic
+    # model despite the similar name) falls through to `str(result)`,
+    # which leaks the object's Python repr into the tool result shown to
+    # the model and the user instead of the clean answer text.
     try:
         tree = ast.parse(expression, mode="eval")
         result = _eval_node(tree.body)
     except Exception as exc:  # noqa: BLE001 - surfaced to the model as text
-        return ToolResponse(
-            content=[TextBlock(type="text", text=f"计算失败：{exc}")],
-        )
+        return f"计算失败：{exc}"
 
-    return ToolResponse(
-        content=[TextBlock(type="text", text=f"{expression} = {result}")],
-    )
+    return f"{expression} = {result}"
