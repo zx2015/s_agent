@@ -25,6 +25,7 @@ it.
 import asyncio
 import json
 import logging
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,10 +34,10 @@ from agentscope.agent import Agent
 
 from server import config
 from server.agent.core import build_agent
+from server.schemas.chat import now_iso
 from server.service.memory_store import agent_state_store
 
 logger = logging.getLogger(__name__)
-from server.schemas.chat import now_iso
 
 _REGISTRY_FILE = config.WORKSPACES_ROOT / "registry.json"
 
@@ -130,6 +131,38 @@ class TaskManager:
 
     def get_task(self, task_id: str) -> TaskRecord | None:
         return self._tasks.get(task_id)
+
+    async def delete_task(self, task_id: str) -> bool:
+        """Permanently remove a task: metadata, cached agent, persisted
+        conversation history, and the workspace directory on disk.
+
+        Unlike `archiveTask` on the frontend (which today only hides a
+        task locally without telling the backend anything — a
+        pre-existing, separate gap, not something this touches), this is
+        real, irreversible deletion. Returns `False` without touching
+        anything if the task doesn't exist, so the caller can 404
+        cleanly.
+        """
+        if task_id not in self._tasks:
+            return False
+
+        del self._tasks[task_id]
+        self._agents.pop(task_id, None)
+        self._save()
+
+        try:
+            await agent_state_store.delete(task_id)
+        except Exception:  # noqa: BLE001 - best-effort, matches save_agent_state
+            logger.warning(
+                "Failed to delete persisted conversation history for "
+                "task %s from Redis; the task metadata and workspace "
+                "files are gone regardless.",
+                task_id,
+                exc_info=True,
+            )
+
+        shutil.rmtree(self.workspace_dir(task_id), ignore_errors=True)
+        return True
 
     # --- workspace directories ------------------------------------------------
 

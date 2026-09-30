@@ -14,6 +14,7 @@
 - [ ] 评估复用 `/media/data/git/股票分析/scripts/tencent_stock.py` 作为 Toolkit 工具 — 优先级：低（阶段二）
 - [ ] 设计 portfolio JSON 读写工具（遵守无引号规范）— 优先级：低（阶段二）
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
+- [ ] 修复"归档"按钮：`TaskHeaderBar.vue` 的归档目前只调用 `workspaceStore.archiveTask`，只在前端内存里隐藏任务，从没调用过后端——刷新页面（重新 `fetchWorkspaces`）后归档过的任务会原样出现。做"删除对话"功能时顺带发现，未修复（不在本次需求范围内）— 优先级：低
 
 ## 已完成
 - [x] 初始化项目基础设施（.learnings / .gitignore / TODO.md / CLAUDE.md）— 2026-09-28
@@ -61,3 +62,9 @@
   - `save_agent_state` 做成"尽力而为"：持久化失败只记日志不抛出（此时该轮回复的 SSE 帧、含 `done`，已经发给前端了，抛出去只会让 `main.py` 外层 except 再发一个多余的 `done`/错误帧）；`get_or_create_agent` 的加载失败则保留原样往外抛——历史读取失败应该让用户看到明确报错，而不是悄悄当作"没有历史"
   - 新增 `tests/test_system_prompt.py`（6 个）+ `tests/test_memory_store.py`（5 个，真实连接本地 Redis）+ `tests/test_task_manager.py`（2 个）；后端测试从 17 增至 24 全部通过
 
+- [x] 新增"删除对话"功能（真正的后端删除，非仅前端隐藏）— 2026-09-30
+  - 后端：`DELETE /api/tasks/{task_id}`，`TaskManager.delete_task()` 一次性清理任务元数据（含持久化到 `registry.json`）、内存里缓存的 `Agent`、Redis 里的 `AgentState`、磁盘上的整个工作区目录；Redis 删除失败按"尽力而为"处理（记日志不阻断，与 `save_agent_state` 同一策略），任务不存在时返回 `False` 交给路由层转 404
+  - 前端：`ApiClient.delete()`、`workspaceStore.deleteTaskRemote()`；`WorkspaceTree.vue` 每个任务行 hover 时显示删除按钮，点击弹 `window.confirm` 二次确认，删的是当前打开的任务时同步清空中间栏的 `sessionStore`
+  - 真实端到端验证：建任务 → 对话 → 确认工作区目录/Redis key/任务列表三处都存在 → 调用删除 → 三处全部清除；重复删除同一 task 正确返回 404
+  - 顺带发现但本次不修：「归档」按钮目前只在前端本地隐藏任务，从未调用后端，刷新页面会复活（见「待办」）
+  - 新增/更新测试：后端 `tests/test_task_manager.py`（+3 个）；前端 `tests/api/client.spec.ts`（+1 个）、`tests/components/WorkspaceTree.spec.ts`（+4 个）；后端测试 24→27，前端测试 89→94，全部通过

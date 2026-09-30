@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from server.service.memory_store import agent_state_store
 from server.service.task_manager import TaskManager
 
 
@@ -34,3 +35,49 @@ async def test_save_agent_state_swallows_persistence_failures():
     ):
         # Must not raise.
         await manager.save_agent_state("t1")
+
+
+@pytest.mark.asyncio
+async def test_delete_task_returns_false_for_an_unknown_task():
+    manager = TaskManager()
+    assert await manager.delete_task("does-not-exist") is False
+
+
+@pytest.mark.asyncio
+async def test_delete_task_removes_metadata_agent_state_and_workspace():
+    manager = TaskManager()
+    task = manager.create_task("default", "待删除的测试任务")
+    workspace_dir = manager.workspace_dir(task.id)
+    assert workspace_dir.exists()
+
+    # Populate an in-memory agent placeholder and a Redis-persisted state
+    # so the test proves both actually get cleaned up, not just metadata.
+    manager._agents[task.id] = object()  # type: ignore[assignment]
+    from agentscope.state import AgentState
+
+    await agent_state_store.save(task.id, AgentState())
+
+    deleted = await manager.delete_task(task.id)
+
+    assert deleted is True
+    assert manager.get_task(task.id) is None
+    assert task.id not in manager._agents
+    assert not workspace_dir.exists()
+    assert await agent_state_store.load(task.id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_task_swallows_redis_failures():
+    """A Redis hiccup during delete must not stop metadata/file cleanup."""
+    manager = TaskManager()
+    task = manager.create_task("default", "redis失败时也要删除的任务")
+
+    with patch(
+        "server.service.task_manager.agent_state_store.delete",
+        new=AsyncMock(side_effect=ConnectionError("redis unreachable")),
+    ):
+        deleted = await manager.delete_task(task.id)
+
+    assert deleted is True
+    assert manager.get_task(task.id) is None
+    assert not manager.workspace_dir(task.id).exists()

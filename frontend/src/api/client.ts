@@ -69,6 +69,17 @@ export class ApiClient {
     return (await response.json()) as T
   }
 
+  async delete<T>(path: string): Promise<T> {
+    const response = await fetch(this.url(path), {
+      method: 'DELETE',
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) {
+      throw new ApiError(await response.text(), response.status)
+    }
+    return (await response.json()) as T
+  }
+
   /**
    * POST a message and consume the response as a stream of parsed SSE frames.
    *

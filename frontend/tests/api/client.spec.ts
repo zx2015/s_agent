@@ -44,4 +44,18 @@ describe('ApiClient', () => {
       expect.anything(),
     )
   })
+
+  it('sends a DELETE request and returns parsed JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new ApiClient('')
+    expect(await client.delete('/api/tasks/t1')).toEqual({ ok: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tasks/t1',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
 })

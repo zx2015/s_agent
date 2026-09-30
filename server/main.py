@@ -71,6 +71,14 @@ async def update_task(task_id: str, payload: UpdateTaskRequest) -> dict:
     return TaskOut(**vars(task)).model_dump(by_alias=True)
 
 
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str) -> dict:
+    deleted = await task_manager.delete_task(task_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {"ok": True}
+
+
 @app.post("/api/chat")
 async def chat(payload: ChatRequest) -> StreamingResponse:
     task = task_manager.get_task(payload.task_id)

@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import WorkspaceTree from '@/components/sidebar/WorkspaceTree.vue'
 import { useWorkspaceStore } from '@/store/workspaces'
+import { useSessionStore } from '@/store/session'
 import type { Workspace } from '@/types'
 
 const FIXTURE: Workspace[] = [
@@ -68,4 +69,74 @@ describe('WorkspaceTree', () => {
     const { wrapper } = mountTree()
     expect(wrapper.find('[data-test="artifact-badge-t1"]').exists()).toBe(true)
   })
+
+  it('does nothing when the delete confirm dialog is dismissed', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false))
+    vi.stubGlobal('fetch', vi.fn())
+    const { wrapper, store } = mountTree()
+
+    await wrapper.find('[data-test="delete-task-t1"]').trigger('click')
+    await flushPromises()
+
+    expect(store.findTask('t1')).toBeDefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('deletes the task via the backend when confirmed', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) }),
+    )
+    const { wrapper, store } = mountTree()
+
+    await wrapper.find('[data-test="delete-task-t1"]').trigger('click')
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/tasks/t1',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+    expect(store.findTask('t1')).toBeUndefined()
+  })
+
+  it('clears the session when deleting the active task', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) }),
+    )
+    const { wrapper, store } = mountTree()
+    store.selectTask('t1')
+    const session = useSessionStore()
+    session.addUserMessage('嗨')
+
+    await wrapper.find('[data-test="delete-task-t1"]').trigger('click')
+    await flushPromises()
+
+    expect(store.activeTaskId).toBeNull()
+    expect(session.messages).toHaveLength(0)
+  })
+
+  it('deleting a non-active task leaves the current session untouched', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) }),
+    )
+    const { wrapper, store } = mountTree()
+    store.selectTask('other-task')
+    const session = useSessionStore()
+    session.addUserMessage('别删我')
+
+    await wrapper.find('[data-test="delete-task-t1"]').trigger('click')
+    await flushPromises()
+
+    expect(store.activeTaskId).toBe('other-task')
+    expect(session.messages).toHaveLength(1)
+  })
 })
+
+function flushPromises(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}

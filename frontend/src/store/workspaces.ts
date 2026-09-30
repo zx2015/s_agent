@@ -89,6 +89,30 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     }
   }
 
+  /**
+   * Permanently delete a task via the backend (metadata, persisted
+   * conversation history, and workspace files all go with it — see
+   * `TaskManager.delete_task`) and remove it from the local tree.
+   *
+   * Unlike `archiveTask`, this actually calls the backend rather than
+   * only hiding the task locally, so a page refresh doesn't bring it
+   * back. Clears the active selection first if it points at the task
+   * being deleted, same reasoning as `archiveTask`.
+   */
+  async function deleteTaskRemote(taskId: string): Promise<void> {
+    if (activeTaskId.value === taskId) {
+      activeTaskId.value = null
+    }
+    await apiClient.delete(`/api/tasks/${taskId}`)
+    for (const workspace of workspaces.value) {
+      const index = workspace.tasks.findIndex((task) => task.id === taskId)
+      if (index >= 0) {
+        workspace.tasks.splice(index, 1)
+        break
+      }
+    }
+  }
+
   function createTask(workspaceId: string, title: string): Task {
     const workspace = workspaces.value.find((item) => item.id === workspaceId)
     if (!workspace) {
@@ -164,5 +188,6 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     markArtifacts,
     fetchWorkspaces,
     createTaskRemote,
+    deleteTaskRemote,
   }
 })

@@ -33,6 +33,14 @@
               title="有产物"
               >◈</span
             >
+            <button
+              class="delete-button"
+              :data-test="`delete-task-${item.value}`"
+              title="删除对话"
+              @click.stop="onDeleteClick(String(item.value), item.label)"
+            >
+              ✕
+            </button>
           </div>
         </template>
       </McList>
@@ -49,9 +57,11 @@ import { ref } from 'vue'
 import { McList } from '@matechat/core'
 import { ListVariant } from '@matechat/core/List'
 import { useWorkspaceStore } from '@/store/workspaces'
+import { useSessionStore } from '@/store/session'
 import type { Task } from '@/types'
 
 const store = useWorkspaceStore()
+const session = useSessionStore()
 const collapsed = ref<Set<string>>(new Set())
 
 /** McList's ListItemData, extended with the task fields the `#item` slot needs. */
@@ -85,6 +95,22 @@ function toggle(workspaceId: string): void {
     next.add(workspaceId)
   }
   collapsed.value = next
+}
+
+/**
+ * Delete is permanent (backend removes the task's metadata, persisted
+ * conversation history, and workspace files — see
+ * `TaskManager.delete_task`), so it's gated behind a confirm dialog
+ * rather than firing straight from the click. `@click.stop` on the
+ * button keeps this from also selecting the row via McList's own click
+ * handling.
+ */
+async function onDeleteClick(taskId: string, title: string): Promise<void> {
+  if (!window.confirm(`确定要删除对话"${title}"吗？此操作不可撤销。`)) return
+
+  const wasActive = store.activeTaskId === taskId
+  await store.deleteTaskRemote(taskId)
+  if (wasActive) session.reset()
 }
 </script>
 
@@ -144,6 +170,32 @@ function toggle(workspaceId: string): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.delete-button {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.task-item:hover .delete-button {
+  display: flex;
+}
+
+.delete-button:hover {
+  background: #ffece8;
+  color: #f53f3f;
 }
 
 .status-dot {
