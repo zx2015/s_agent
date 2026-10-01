@@ -13,6 +13,11 @@
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
 
 ## 已完成
+- [x] Tavily MCP 检索工具默认权限安全放行（免除人工二次确认）— 2026-10-01
+  - 根因定位：AgentScope 的 `PermissionMode.DEFAULT` 对未显式声明只读或权限的 MCP 工具执行默认保底（Step 6 fallback -> ASK），导致 Tavily 搜索/提取工具触发 `RequireUserConfirmEvent`；
+  - 精细化放行：在 `server/agent/core.py` 中定义 `SAFE_MCP_TOOL_PREFIXES` 与 `SAFE_MCP_TOOLS`，在默认的 `dangerous` 模式下自动向 `PermissionEngine` 注入 `PermissionBehavior.ALLOW` 规则；
+  - 严格度保留：在用户选择 `always` 模式（全确认）时依然受控请求确认；Bash 高危命令（如 `rm -rf`）依然严格拦截；
+  - 自动化测试：在 `tests/test_mcp.py` 扩充单测（覆盖 dangerous 自动放行与 always 人工确认），后端 96 个单测全部通过。
 - [x] 设置抽屉配置接入后端与任务头部操作按钮全链路闭环 — 2026-10-01
   - 后端接口与持久化闭环：
     - `TaskOut` 与 `UpdateTaskRequest` 增加 `is_archived: bool` 与 `workspace_path: str`；
