@@ -1,40 +1,70 @@
 <template>
   <div class="three-column">
-    <Splitpanes class="default-theme" @resize="onResize">
-      <Pane v-if="!leftCollapsed" :size="leftSize" min-size="14" max-size="34">
-        <SidebarLeft />
+    <Splitpanes class="default-theme" @resize="onResize" @resized="onResize">
+      <Pane
+        v-if="!leftCollapsed"
+        class="pane-left"
+        :size="leftSize"
+        min-size="14"
+        max-size="34"
+      >
+        <div class="pane-inner">
+          <SidebarLeft />
+          <button
+            class="collapse-toggle toggle-left toggle-left-open"
+            aria-label="折叠左侧栏"
+            title="折叠左侧栏"
+            @click="toggleLeftCollapse"
+          >
+            ◂
+          </button>
+        </div>
       </Pane>
 
-      <Pane :size="middleSize" min-size="30">
+      <Pane class="pane-middle" :size="middleSize" min-size="30">
         <SidebarMiddle />
       </Pane>
 
       <Pane
         v-if="!rightCollapsed"
+        class="pane-right"
         :size="rightSize"
         min-size="18"
         max-size="42"
       >
-        <SidebarRight />
+        <div class="pane-inner">
+          <button
+            class="collapse-toggle toggle-right toggle-right-open"
+            aria-label="折叠结果区"
+            title="折叠结果区"
+            @click="toggleRightCollapse"
+          >
+            ▸
+          </button>
+          <SidebarRight />
+        </div>
       </Pane>
     </Splitpanes>
 
+    <!-- Floating toggle buttons when respective sidebars are collapsed -->
     <button
-      class="collapse-toggle toggle-left"
-      :style="{ left: leftCollapsed ? '0' : `${leftSize}%` }"
-      :aria-label="leftCollapsed ? '展开左侧栏' : '折叠左侧栏'"
-      @click="leftCollapsed = !leftCollapsed"
+      v-if="leftCollapsed"
+      class="collapse-toggle toggle-left toggle-left-closed"
+      aria-label="展开左侧栏"
+      title="展开左侧栏"
+      @click="toggleLeftCollapse"
     >
-      {{ leftCollapsed ? '▸' : '◂' }}
+      ▸
     </button>
 
     <button
-      class="collapse-toggle toggle-right"
-      :style="{ right: rightCollapsed ? '0' : `${rightSize}%` }"
-      :aria-label="rightCollapsed ? '展开结果区' : '折叠结果区'"
-      @click="rightCollapsed = !rightCollapsed"
+      v-if="rightCollapsed"
+      class="collapse-toggle toggle-right toggle-right-closed"
+      aria-label="展开结果区"
+      title="展开结果区"
+      @click="toggleRightCollapse"
     >
-      {{ rightCollapsed ? '◂' : '▸' }}
+      ◂
     </button>
   </div>
 </template>
@@ -57,13 +87,33 @@ const leftSize = ref(20)
 const middleSize = ref(80)
 const rightSize = ref(30)
 
+function toggleLeftCollapse(): void {
+  if (leftCollapsed.value) {
+    leftCollapsed.value = false
+    middleSize.value = Math.max(30, 100 - leftSize.value - (rightCollapsed.value ? 0 : rightSize.value))
+  } else {
+    leftCollapsed.value = true
+    middleSize.value = 100 - (rightCollapsed.value ? 0 : rightSize.value)
+  }
+}
+
+function toggleRightCollapse(): void {
+  if (rightCollapsed.value) {
+    rightCollapsed.value = false
+    middleSize.value = Math.max(30, 100 - (leftCollapsed.value ? 0 : leftSize.value) - rightSize.value)
+  } else {
+    rightCollapsed.value = true
+    middleSize.value = 100 - (leftCollapsed.value ? 0 : leftSize.value)
+  }
+}
+
 // Spec §1.2: the result pane opens itself when an artifact appears, so the
 // user does not have to guess that there is something to look at.
 watch(
   () => session.artifacts.length,
   (count, previous) => {
-    if (count > (previous ?? 0)) {
-      rightCollapsed.value = false
+    if (count > (previous ?? 0) && rightCollapsed.value) {
+      toggleRightCollapse()
     }
   },
 )
@@ -77,17 +127,19 @@ watch(
  *
  * @param payload - The resize event carrying the current pane sizes.
  */
-function onResize(payload: SplitpanesResizePayload): void {
-  const sizes = payload.panes.map((pane) => pane.size)
+function onResize(payload: SplitpanesResizePayload | Array<{ size: number }>): void {
+  const panes = Array.isArray(payload) ? payload : (payload.panes || [])
+  const sizes = panes.map((pane: any) => pane.size)
+  if (sizes.length === 0) return
 
-  if (!leftCollapsed.value && !rightCollapsed.value) {
+  if (!leftCollapsed.value && !rightCollapsed.value && sizes.length >= 3) {
     ;[leftSize.value, middleSize.value, rightSize.value] = sizes
-  } else if (leftCollapsed.value && rightCollapsed.value) {
+  } else if (leftCollapsed.value && rightCollapsed.value && sizes.length >= 1) {
     middleSize.value = sizes[0]
-  } else if (leftCollapsed.value) {
+  } else if (leftCollapsed.value && sizes.length >= 2) {
     middleSize.value = sizes[0]
     rightSize.value = sizes[1]
-  } else {
+  } else if (sizes.length >= 2) {
     leftSize.value = sizes[0]
     middleSize.value = sizes[1]
   }
@@ -101,27 +153,63 @@ function onResize(payload: SplitpanesResizePayload): void {
   width: 100%;
 }
 
+:deep(.splitpanes__pane.pane-left),
+:deep(.splitpanes__pane.pane-right) {
+  overflow: visible !important;
+  position: relative;
+}
+
+.pane-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
 .collapse-toggle {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
   width: 16px;
   height: 40px;
-  background: #fff;
+  background: var(--color-bg-base);
   border: 1px solid var(--color-border);
   cursor: pointer;
   font-size: 10px;
   z-index: 10;
   padding: 0;
   color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  transition: background-color 0.15s, color 0.15s;
 }
 
-.toggle-left {
+.collapse-toggle:hover {
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+}
+
+.toggle-left-open {
+  right: -16px;
   border-left: none;
   border-radius: 0 4px 4px 0;
 }
 
-.toggle-right {
+.toggle-left-closed {
+  left: 0;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+}
+
+.toggle-right-open {
+  left: -16px;
+  border-right: none;
+  border-radius: 4px 0 0 4px;
+}
+
+.toggle-right-closed {
+  right: 0;
   border-right: none;
   border-radius: 4px 0 0 4px;
 }
