@@ -216,6 +216,14 @@ class DynamicSubAgentRunner:
                     source="subagentSandbox",
                 )
             )
+            agent._engine.add_rule(
+                PermissionRule(
+                    tool_name=fs_tool,
+                    rule_content="data/wiki/**",
+                    behavior=PermissionBehavior.ALLOW,
+                    source="subagentSandbox",
+                )
+            )
 
         # Bash 仅允许 Python 命令计算
         for py_cmd in (
@@ -232,6 +240,19 @@ class DynamicSubAgentRunner:
                     source="subagentSandbox",
                 )
             )
+
+        # 核心授权：对沙箱中挂载的所有垂直领域工具、MCP 工具、维基与金融工具配置完全授权
+        # 确保在工作空间与安全沙箱内自主闭环执行，杜绝因无用户交互通道而陷入“等待授权”假死
+        for tool in resolved_tools:
+            if tool.name not in ("Write", "Edit", "Bash"):
+                agent._engine.add_rule(
+                    PermissionRule(
+                        tool_name=tool.name,
+                        rule_content="",
+                        behavior=PermissionBehavior.ALLOW,
+                        source="subagentSandbox",
+                    )
+                )
 
         # 6. 执行单轮推理循环直至产出最终报告
         inputs = Msg(

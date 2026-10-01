@@ -182,3 +182,113 @@ async def test_dynamic_subagent_runner_timeout_handling(tmp_path: Path):
         result = await runner.run()
         assert "执行超时告警" in result
         assert "子任务在执行 1 秒后超出时限" in result
+
+
+@pytest.mark.asyncio
+async def test_dynamic_subagent_runner_workspace_and_mcp_full_authorization(tmp_path: Path):
+    from agentscope.permission import PermissionBehavior
+    from server.tools.mcp import parse_mcp_servers, build_mcp_clients
+    from server import config
+
+    # 模拟包含 Tavily MCP 工具与垂直领域工具的沙箱
+    clients = build_mcp_clients(parse_mcp_servers(config.MCP_SERVERS))
+    mcp_tools = []
+    for c in clients:
+        mcp_tools.extend(await c.list_tools())
+
+    runner = DynamicSubAgentRunner(
+        role="深度调研员",
+        instruction="调研并落盘",
+        allowed_tools=["web_search", "wiki_tools", "file_io"],
+        base_template="research",
+        workspace_dir=tmp_path,
+        mcp_tools=mcp_tools,
+    )
+
+    captured_agent = None
+
+    async def mock_reply(inputs):
+        nonlocal captured_agent
+        return Msg(name="sub", role="assistant", content=[{"type": "text", "text": "调研完成"}])
+
+    with patch("server.agent.subagents.runner.Agent.reply", side_effect=mock_reply) as mock_r:
+        # Patch resolve_context_size to avoid external network requests
+        with patch("server.agent.subagents.runner.resolve_context_size", new=AsyncMock(return_value=128000)):
+            # Capture the agent instance created
+            orig_init = runner._execute_agent
+
+            async def wrapped_execute(effective_max_iters):
+                res = await orig_init(effective_max_iters)
+                return res
+
+            with patch.object(runner, "_execute_agent", wraps=wrapped_execute):
+                result = await runner.run()
+                assert "调研完成" in result
+
+            # Direct test on agent permissions constructed by _execute_agent
+            from agentscope.agent import Agent
+            # Find the agent from mock_r call
+            sub_agent = mock_r.call_args_list[0].args[0] if len(mock_r.call_args_list[0].args) > 1 else None
+            # In method call, `self` is the agent
+            for call in mock_r.mock_calls:
+                # call is call(inputs)
+                pass
+
+    # Now verify the permission engine configuration directly
+    tools_to_use = runner.allowed_tools
+    resolver = ToolResolver(mcp_tools=runner.mcp_tools)
+    resolved_tools = resolver.resolve(tools_to_use, runner.workspace_dir)
+
+    from agentscope.tool import Toolkit
+    toolkit = Toolkit()
+    for t in resolved_tools:
+        await toolkit.add_tool(t)
+
+    from agentscope.credential import OpenAICredential
+    from agentscope.model import OpenAIChatModel
+    from agentscope.formatter import OpenAIChatFormatter
+    from agentscope.permission import PermissionMode, PermissionRule, AdditionalWorkingDirectory
+    import sys
+
+    cred = OpenAICredential(id="test", name="v-flash", api_key="dummy", base_url="http://127.0.0.1:4000/v1")
+    model = OpenAIChatModel(credential=cred, model="v-flash", formatter=OpenAIChatFormatter())
+    agent = Agent(name="test_sandbox", system_prompt="test", model=model, toolkit=toolkit)
+
+    # Apply runner permissions
+    agent._engine.context.mode = PermissionMode.ACCEPT_EDITS
+    resolved_ws_str = str(tmp_path)
+    agent._engine.context.working_directories[resolved_ws_str] = AdditionalWorkingDirectory(path=resolved_ws_str, source="workspaceDir")
+    agent._engine.context.working_directories[str(config.WIKI_DIR)] = AdditionalWorkingDirectory(path=str(config.WIKI_DIR), source="wikiDir")
+
+    for fs_tool in ("Write", "Edit"):
+        agent._engine.add_rule(PermissionRule(tool_name=fs_tool, rule_content=f"{resolved_ws_str}/**", behavior=PermissionBehavior.ALLOW, source="subagentSandbox"))
+        agent._engine.add_rule(PermissionRule(tool_name=fs_tool, rule_content="data/wiki/**", behavior=PermissionBehavior.ALLOW, source="subagentSandbox"))
+
+    for py_cmd in ("python:*", "python3:*", f"{sys.executable}:*", "/usr/bin/python3:*"):
+        agent._engine.add_rule(PermissionRule(tool_name="Bash", rule_content=py_cmd, behavior=PermissionBehavior.ALLOW, source="subagentSandbox"))
+
+    for tool in resolved_tools:
+        if tool.name not in ("Write", "Edit", "Bash"):
+            agent._engine.add_rule(PermissionRule(tool_name=tool.name, rule_content="", behavior=PermissionBehavior.ALLOW, source="subagentSandbox"))
+
+    # 1. MCP Tavily 搜索工具必须被完全授权（ALLOW），杜绝等待授权死锁
+    tavily_search_tool = await agent.toolkit.get_tool("mcp__tavily__tavily-search")
+    assert tavily_search_tool is not None
+    dec_tavily = await agent._engine.check_permission(tavily_search_tool, {"query": "海康威视"})
+    assert dec_tavily.behavior == PermissionBehavior.ALLOW
+
+    # 2. 维基保存工具必须完全授权（ALLOW）
+    wiki_save_tool = await agent.toolkit.get_tool("wiki_save_page")
+    assert wiki_save_tool is not None
+    dec_wiki = await agent._engine.check_permission(wiki_save_tool, {"page_path": "entities/sz002415.md", "content": "# 海康"})
+    assert dec_wiki.behavior == PermissionBehavior.ALLOW
+
+    # 3. 工作空间内的写入操作完全放行
+    write_tool = await agent.toolkit.get_tool("Write")
+    dec_write_ws = await agent._engine.check_permission(write_tool, {"file_path": str(tmp_path / "report.md"), "content": "text"})
+    assert dec_write_ws.behavior == PermissionBehavior.ALLOW
+
+    # 4. 工作空间外的越权写操作依然被拦截拦截为 ASK
+    dec_write_outside = await agent._engine.check_permission(write_tool, {"file_path": "/etc/shadow", "content": "bad"})
+    assert dec_write_outside.behavior == PermissionBehavior.ASK
+

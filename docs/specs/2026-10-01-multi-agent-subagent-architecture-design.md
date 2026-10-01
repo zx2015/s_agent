@@ -156,13 +156,15 @@ def delegate_task(
   - 子 Agent 的执行环境 block 注入该工作区绝对路径及 `data/wiki/` 绝对路径；
   - 子 Agent 具有完全隔离的 `AgentState` 实例与独立的上下文消息数组（`state.context`），其多轮 ReAct 的中间试错消息阅后即焚，不持久化到 Redis 主会话键中。
 
-#### 3. HITL 权限控制与防权限外溢（Permission Inheritance & Anti-Escalation）
-- **严禁全量绕过（No Wildcard BYPASS）**：绝不为了图省事而将子智能体设置为 `PermissionMode.BYPASS`，否则会引发“主 Agent 受控 → 子 Agent 失控”的高危安全漏洞；
-- **最小权限白名单沙箱（Least Privilege Whitelist Sandbox）**：
-  - 子智能体采用与主 Agent 一致的 `PermissionMode.ACCEPT_EDITS` 安全模式；
-  - **白名单机制**：只有主 Agent 授权的 `allowed_tools` 会被挂载到子智能体，且只放行安全读操作与在 `{workspace_dir}/**` 及 `data/wiki/**` 内的写入操作；
-  - **`Bash` 权限收紧**：子智能体中的 `Bash` 工具**仅限运行 Python 脚本和数据计算**，严禁执行系统管理命令、提权命令或在工作区外部执行写操作；
-  - **越权防御**：若子智能体企图执行白名单之外或超出工作区的操作，AgentScope 引擎直接触发权限拦截并抛出错误信息给子智能体模型，由其自主调整策略，绝不绕过安全检查。
+#### 3. HITL 权限控制与工作空间内完全授权（Permission Inheritance & Workspace Full Authorization）
+- **工作空间内完全授权原则（Full Authorization for Workspace Operations）**：
+  - 核心共识：凡是在任务工作空间（`workspace_dir`）和本地维基知识库（`data/wiki/`）范围内的常规操作，以及主 Agent 派发给子智能体沙箱的垂直业务工具，必须给予**完全授权（ALLOW）**，实现自主闭环推进，绝不因缺少人工交互弹窗而中断执行流；
+  - 杜绝子智能体等待授权假死：子智能体运行于无人工确认通道的独立异步沙箱中（调用 `agent.reply()`），由于外部 MCP 工具（如 Tavily 检索）与部分非只读工具在 AgentScope 默认策略下会被标记为 `ASK`，必须在子智能体引擎初始化时，对主 Agent 授予该子智能体的所有业务工具统一注入 `PermissionBehavior.ALLOW` 白名单规则，确保子智能体完全自主执行；
+- **沙箱安全与防权限外溢（Sandbox Safety & Anti-Escalation）**：
+  - 子智能体采用与主 Agent 一致的 `PermissionMode.ACCEPT_EDITS` 安全模式，不使用全量无规则绕过；
+  - **白名单路径约束**：文件读写工具（`Write`、`Edit`）仅允许操作 `{workspace_dir}/**` 与 `data/wiki/**`；若尝试向系统根目录、敏感配置文件等外部路径写文件，依然会被底层拦截；
+  - **`Bash` 权限收紧**：子智能体中的 `Bash` 工具**仅限运行 Python 脚本和数据计算**（`python:*`、`python3:*` 等），严禁执行提权命令或系统破坏性命令（如 `rm -rf /` 等，底层自动拦截为 `ASK` 阻止执行）；
+  - **越权防御**：若子智能体企图执行白名单之外或超出工作区的操作，AgentScope 引擎直接触发权限拦截并抛出错误信息给子智能体模型，由其自主调整策略。
 
 ---
 

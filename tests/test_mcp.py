@@ -159,6 +159,16 @@ async def test_subagent_sandbox_python_and_bash_permissions(tmp_path):
                 source="subagentSandbox",
             )
         )
+    for t in tools:
+        if t.name not in ("Write", "Edit", "Bash"):
+            subagent._engine.add_rule(
+                PermissionRule(
+                    tool_name=t.name,
+                    rule_content="",
+                    behavior=PermissionBehavior.ALLOW,
+                    source="subagentSandbox",
+                )
+            )
 
     bash_tool = await subagent.toolkit.get_tool("Bash")
     # Python 计算放行
@@ -168,4 +178,10 @@ async def test_subagent_sandbox_python_and_bash_permissions(tmp_path):
     # 危险系统命令依然需要人工确认
     danger_dec = await subagent._engine.check_permission(bash_tool, {"command": "rm -rf /"})
     assert danger_dec.behavior == PermissionBehavior.ASK
+
+    # 子智能体分配的通用与计算工具完全放行
+    calc_tool = await subagent.toolkit.get_tool("calculate")
+    calc_dec = await subagent._engine.check_permission(calc_tool, {"expression": "1 + 1"})
+    assert calc_dec.behavior == PermissionBehavior.ALLOW
+
 

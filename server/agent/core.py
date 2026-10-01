@@ -370,6 +370,14 @@ async def build_agent(
                     source="systemDefault",
                 ),
             )
+            agent._engine.add_rule(
+                PermissionRule(
+                    tool_name=fs_tool,
+                    rule_content="data/wiki/**",
+                    behavior=PermissionBehavior.ALLOW,
+                    source="systemDefault",
+                ),
+            )
 
         # delegate_task 与维基高层查阅工具免人工确认直接放行
         for auto_allowed_tool in ("delegate_task", "wiki_query", "wiki_read"):
