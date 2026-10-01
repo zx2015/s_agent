@@ -15,6 +15,7 @@ Only the calculator is project-specific.
 import logging
 import os
 import platform
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ from agentscope.formatter import OpenAIChatFormatter
 from agentscope.model import OpenAIChatModel
 from agentscope.middleware import AgenticMemoryMiddleware
 from agentscope.permission import (
+    AdditionalWorkingDirectory,
     PermissionBehavior,
     PermissionDecision,
     PermissionMode,
@@ -53,6 +55,22 @@ from server import config
 from server.agent.calibrator import resolve_context_size
 from server.tools.calculator import calculate
 from server.tools.mcp import build_mcp_clients, parse_mcp_servers
+from server.tools.stock import (
+    finance_overview,
+    finance_record_metric,
+    finance_watchlist,
+    market_index_overview,
+    sqlite_describe_table,
+    sqlite_execute,
+    sqlite_query,
+    sqlite_show_tables,
+    stock_batch_quotes,
+    stock_handicap,
+    stock_kline,
+    stock_minute,
+    stock_quote,
+    stock_search,
+)
 
 # MCP tools that are external read-only operations and safe to run by default
 # without requiring human-in-the-loop confirmation in "dangerous" mode.
@@ -93,12 +111,30 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- 在每个关键步骤开始或完成时，调用 TaskUpdate 更新任务状态（in_progress / completed），"
     "系统会自动在界面右侧「待办」面板中向用户动态展现执行进度。\n\n"
     "【计算与排版准则】\n"
-    "- 任何超过两个数字的算术运算，必须调用 calculate 工具，禁止自己心算得出数字结果。\n"
+    "- 任何超过两个数字的算术运算，优先调用 calculate 工具，禁止自己心算得出数字结果；"
+    "若调用 Bash 运行 Python 处理复杂数据或批量指标计算，在包含百分号「%」的文本中务必使用 f-string（如 f'同比+229%, 净利润={{val:.2f}}'）而非百分号格式化，"
+    "避免因未转义「%」触发语法错误。\n"
     "- 除工具调用外，你输出的所有文本都会在工作台的对话气泡中以 GitHub 风格 Markdown（GFM）渲染展示，"
     "请规范排版——代码块标注语言、用表格呈现对比数据、用列表整理要点。\n\n"
+    "【金融投研与结构化数据跨会话持久化（双轨制架构）】\n"
+    "- 市场量价与行情查询：\n"
+    "  1. 标的识别：若代码不明确，调用 stock_search 搜索标准代码与市场（支持拼音、代码与中文名）；\n"
+    "  2. 大盘环境：调用 market_index_overview 获取核心宏观指数环境；\n"
+    "  3. 现价与估值：调用 stock_quote 获取实时价格、估值（PE/PB）与市值。系统已内置 SQLite WAL 透明缓存，盘中自动按 3 分钟 TTL 刷新，盘后与周末全天直读，无需担心重复消耗外网；\n"
+    "  4. 历史形态与量价：调用 stock_kline 获取历史 K 线（内置增量存储）、stock_minute 获取分时明细，stock_handicap 获取主力盘口比例；\n"
+    "  5. 深度全网资讯：结合 tavily 搜索工具（如 mcp__tavily__tavily-search）检索最新公告、研报与行业周期。\n"
+    "- 结构化数据持久化与跨会话复用（预定义核心表 + Agent 自主动态建表）：\n"
+    "  1. 查看数据库沉淀全览：调用 finance_overview 查看本地已保存的所有股票现价与估值对比；\n"
+    "  2. 管理用户自选关注池：调用 finance_watchlist（list/add/update/remove）跨会话维护用户买卖心理价与核心逻辑；\n"
+    "  3. 记录关键财务事实底稿：调用 finance_record_metric 记录经营现金流、费用率、分红等高价值财务测算；\n"
+    "  4. 复杂只读 SQL 查询：调用 sqlite_query 针对本地数据库执行多表关联（JOIN）或统计筛选（如查找 PE < 20 且市值 > 500 亿的股票）；\n"
+    "  5. Agent 自主动态建表（无限扩展能力）：当未来遇到未预先定义的全新结构化数据（如上游生鲜乳周度价格走势、高管增减持明细、自定义量化信号）且后续需要跨会话比对时，"
+    "可自主调用 sqlite_execute 执行 CREATE TABLE IF NOT EXISTS custom_<表名> 并插入数据！预定义系统核心表受安全保护，严禁执行 DROP TABLE。\n"
+    "- 分析必须客观求实，严禁编造虚假数据。所有系统性的长篇投研成果须通过 Write/Edit 工具在工作区根目录下生成规范的 Markdown 交付物（如《XXX投资价值分析.md》）。\n\n"
     "【权限与运行时提示】\n"
-    "- 工具在用户当前选择的权限模式下运行；如果一次工具调用被拒绝，代表用户主动拒绝了该操作，"
-    "请调整思路或更换方案，说明被拒绝操作的影响，不要在没有新信息的情况下直接重试同一个命令。\n"
+    "- 系统在安全模式下默认放行所有安全的只读工具、在当前任务工作区或记忆库内写文件（Write/Edit）以及常规 Python 命令运行（Bash: python3/python），无需用户反复确认；"
+    "但当涉及工作区外的文件操作或高危系统命令（如破坏性删除、系统提权等）时，会触发人工确认（HITL）。\n"
+    "- 如果一次工具调用被拒绝，代表用户主动拒绝了该操作，请调整思路或更换方案，说明被拒绝操作的影响，不要在没有新信息的情况下直接重试同一个命令。\n"
     "- 对话消息与工具结果中出现的 <system-reminder> 标签，是运行框架自动注入的运行时提示"
     "（例如当前时间、待办任务状态等），并非用户本人发出的内容。\n"
     "- 如果配置了工具中间件（middleware），它可能会拦截或调整工具调用，请将中间件返回的结果当作对操作意图的反馈来处理。\n\n"
@@ -247,6 +283,34 @@ async def build_agent(
         ),
     )
 
+    # Tencent Stock Native Toolkit & Financial Persistence Bridge
+    stock_tool_specs = [
+        (stock_search, "Search stock symbol and company name"),
+        (stock_quote, "Real-time stock quote and valuation with transparent SQLite caching"),
+        (stock_batch_quotes, "Batch stock quotes comparison"),
+        (stock_kline, "Historical K-line series query with local incremental storage"),
+        (stock_minute, "Intraday minute price and volume"),
+        (stock_handicap, "Handicap big/small order distribution"),
+        (market_index_overview, "Market benchmark index overview"),
+        (finance_overview, "Cross-session overview of all persisted stocks in the local SQLite database"),
+        (finance_watchlist, "Manage persistent cross-session stock watchlist and buy/sell targets"),
+        (finance_record_metric, "Record deep financial facts and calculations into SQLite"),
+        (sqlite_show_tables, "List all tables in local financial SQLite database"),
+        (sqlite_describe_table, "Inspect table columns and schemas in SQLite database"),
+        (sqlite_query, "Execute read-only SQL SELECT queries against financial SQLite database"),
+        (sqlite_execute, "Execute safe DDL/DML SQL statements to create custom tables or insert non-standard financial data"),
+    ]
+    for fn, desc in stock_tool_specs:
+        await toolkit.add_tool(
+            FunctionTool(
+                fn,
+                permission=PermissionDecision(
+                    behavior=PermissionBehavior.ALLOW,
+                    message=f"Safe financial market & structured persistence tool: {desc}",
+                ),
+            ),
+        )
+
     effective_model = model_name or config.MODEL_NAME
     effective_base_url = base_url or config.LITELLM_BASE_URL
     effective_hitl_mode = hitl_mode or "dangerous"
@@ -279,9 +343,9 @@ async def build_agent(
         reserve_ratio=config.CONTEXT_RESERVE_RATIO,
     )
 
+    mem_path = Path(memory_dir or config.LONGTERM_MEMORY_DIR).resolve()
     middlewares = []
     if config.LONGTERM_MEMORY_ENABLED:
-        mem_path = Path(memory_dir or config.LONGTERM_MEMORY_DIR).resolve()
         mem_path.mkdir(parents=True, exist_ok=True)
         memory_md = mem_path / AgenticMemoryMiddleware.FILENAME_MEMORY_MD
         if not memory_md.exists():
@@ -329,7 +393,62 @@ async def build_agent(
                     ),
                 )
     else:  # "dangerous" or default
-        agent._engine.context.mode = PermissionMode.DEFAULT
+        # 安全模式（dangerous）下：
+        # 1. 在安全工作区目录及记忆目录内的写文件/编辑（Write/Edit）自动放行无需人工确认；
+        # 2. 常规 Python 命令执行（Bash: python / python3）自动放行无需人工确认；
+        # 3. 只有敏感目录写入、高危系统命令（破坏性删除、系统提权等）才触发人工确认（HITL）。
+        agent._engine.context.mode = PermissionMode.ACCEPT_EDITS
+
+        resolved_ws = str(workspace_dir.resolve())
+        agent._engine.context.working_directories[resolved_ws] = AdditionalWorkingDirectory(
+            path=resolved_ws,
+            source="workspaceDir",
+        )
+        resolved_mem = str(mem_path)
+        agent._engine.context.working_directories[resolved_mem] = AdditionalWorkingDirectory(
+            path=resolved_mem,
+            source="memoryDir",
+        )
+
+        for fs_tool in ("Write", "Edit"):
+            agent._engine.add_rule(
+                PermissionRule(
+                    tool_name=fs_tool,
+                    rule_content=f"{resolved_ws}/**",
+                    behavior=PermissionBehavior.ALLOW,
+                    source="systemDefault",
+                ),
+            )
+            agent._engine.add_rule(
+                PermissionRule(
+                    tool_name=fs_tool,
+                    rule_content=f"{resolved_mem}/**",
+                    behavior=PermissionBehavior.ALLOW,
+                    source="systemDefault",
+                ),
+            )
+
+        # 运行 python/python3 脚本或快速计算命令直接放行
+        python_bash_rules = [
+            "python:*",
+            "python3:*",
+            "python3.*:*",
+            "/usr/bin/python:*",
+            "/usr/bin/python3:*",
+            "/usr/local/bin/python:*",
+            "/usr/local/bin/python3:*",
+            f"{sys.executable}:*",
+        ]
+        for rule_content in python_bash_rules:
+            agent._engine.add_rule(
+                PermissionRule(
+                    tool_name="Bash",
+                    rule_content=rule_content,
+                    behavior=PermissionBehavior.ALLOW,
+                    source="systemDefault",
+                ),
+            )
+
         # Tavily MCP 等只读网络检索工具属于安全操作，默认自动放行无需人工确认
         allowed_tools = set(SAFE_MCP_TOOLS)
         try:

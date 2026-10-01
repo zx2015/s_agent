@@ -105,3 +105,9 @@ LONGTERM_MEMORY_RETRIEVAL_MAX_TOKENS = int(
     os.getenv("S_AGENT_LONGTERM_MEMORY_RETRIEVAL_MAX_TOKENS", "2000"),
 )
 
+# --- Structured Financial Persistence Database ---
+# SQLite 本地持久化数据库路径（全局跨会话共享）
+FINANCE_DB_PATH = Path(
+    os.getenv("S_AGENT_FINANCE_DB_PATH", str(REPO_ROOT / "data" / "finance.db")),
+)
+

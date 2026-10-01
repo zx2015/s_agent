@@ -116,3 +116,46 @@ async def test_tavily_mcp_tools_ask_confirmation_in_always_mode(tmp_path):
     if tool is not None:
         decision = await agent._engine.check_permission(tool, {})
         assert decision.behavior == PermissionBehavior.ASK
+
+
+@pytest.mark.asyncio
+async def test_workspace_writes_and_python_bash_allowed_in_dangerous_mode(tmp_path):
+    from agentscope.permission import PermissionBehavior
+    from server.agent.core import build_agent
+
+    agent = await build_agent(workspace_dir=tmp_path, hitl_mode="dangerous")
+
+    # 1. 安全工作区内写文件与编辑文件：直接放行
+    write_tool = await agent.toolkit.get_tool("Write")
+    edit_tool = await agent.toolkit.get_tool("Edit")
+    ws_file = str(tmp_path / "analysis_report.md")
+
+    write_dec = await agent._engine.check_permission(write_tool, {"file_path": ws_file})
+    assert write_dec.behavior == PermissionBehavior.ALLOW
+
+    edit_dec = await agent._engine.check_permission(edit_tool, {"file_path": ws_file})
+    assert edit_dec.behavior == PermissionBehavior.ALLOW
+
+    # 2. 敏感/系统目录写文件：依然触发人工确认
+    sys_dec = await agent._engine.check_permission(write_tool, {"file_path": "/etc/shadow"})
+    assert sys_dec.behavior == PermissionBehavior.ASK
+
+    # 3. 运行 python3 / python 脚本与计算命令：直接放行
+    bash_tool = await agent.toolkit.get_tool("Bash")
+    py_cmd = 'python3 -c "print(1 + 1)"'
+    py_dec = await agent._engine.check_permission(bash_tool, {"command": py_cmd})
+    assert py_dec.behavior == PermissionBehavior.ALLOW
+
+    # 用户真实场景下的多行 Python 计算命令
+    calc_cmd = (
+        'python3 -c "\n'
+        'print(\'H1经营现金流97.59亿 同比+229%, 现金/归母 = %.2f\' % (97.59/57.59))\n'
+        'print(\'Q2单季经营现金流60亿, +199%\')\n'
+        '"'
+    )
+    calc_dec = await agent._engine.check_permission(bash_tool, {"command": calc_cmd})
+    assert calc_dec.behavior == PermissionBehavior.ALLOW
+
+    # 4. 非白名单的高风险系统命令：依然需要人工确认
+    non_py_dec = await agent._engine.check_permission(bash_tool, {"command": "apt-get update"})
+    assert non_py_dec.behavior == PermissionBehavior.ASK

@@ -3,16 +3,55 @@
 > 本文件随代码纳入版本控制。完成事项移至"已完成"并标注日期，严禁直接删除。
 
 ## 进行中
-- （暂无进行中任务）
+（暂无进行中的任务，请根据下方待办推进）
 
 ## 待办
-- [ ] 实现 HITL 权限引擎的精细化规则（当前仅接入 AgentScope 内置 Bash/Write/Edit 危险模式检测的 ASK 行为，未做自定义黑名单/白名单）— 优先级：中（阶段一 spec 模块 E）
-- [ ] 跑通"通用 Agent"端到端最小闭环后，再规划股票分析改造 — 优先级：中（依赖真实 key 验证）
-- [ ] 评估复用 `/media/data/git/股票分析/scripts/tencent_stock.py` 作为 Toolkit 工具 — 优先级：低（阶段二）
-- [ ] 设计 portfolio JSON 读写工具（遵守无引号规范）— 优先级：低（阶段二）
+- [ ] 腾讯股票 + Tavily 混合投研架构落地（下一阶段：投研 SOP Skill 沉淀与实战报告评测）— 优先级：高（设计文档：[`docs/specs/2026-10-01-tencent-stock-tavily-hybrid-design.md`](docs/specs/2026-10-01-tencent-stock-tavily-hybrid-design.md)）
+  - [ ] 沉淀投研 SOP Skill（`stock-research`）并实战评测
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
 
 ## 已完成
+- [x] 结构化金融数据跨会话持久化与双轨制 SQLite 自主缓存系统落地 — 2026-10-01
+  - 设计文档与架构：编写 [`docs/specs/2026-10-01-structured-financial-data-persistence-design.md`](docs/specs/2026-10-01-structured-financial-data-persistence-design.md)，确立“预定义核心表 + Agent 自治动态建表”双轨制架构；
+  - 核心持久化层实现：新建 `server/service/finance_db.py`：
+    - 数据库选型：本地轻量 SQLite，启用 WAL 模式（`PRAGMA journal_mode = WAL`）、忙等待超时（`busy_timeout = 5000`）与外键约束；
+    - 6 大预定义系统核心表：`stocks`（标的元数据）、`stock_daily_quotes`（日度估值与量价快照，含 PE/PB/内外盘/大单比例等 22 关键字段）、`stock_kline_records`（历史 K 线增量序列）、`stock_financial_metrics`（深度财务测算事实底稿）、`user_watchlist`（跨会话自选股票池与买卖心理价跟踪）、`research_notes`（结构化投研笔记）；
+    - Agent 自治 SQLite 原生工具集与安全护栏：`sqlite_show_tables`、`sqlite_describe_table`、`sqlite_query`（纯只读 SELECT）、`sqlite_execute`（受控 DDL/DML，严禁 DROP 核心系统表，拦截 ATTACH/VACUUM 等危险指令）；
+    - 高阶投研查询接口：`finance_overview`（全览）、`finance_watchlist`（自选池增删改查）、`finance_record_metric`（财务事实底稿持久化）；
+  - 透明 Cache-Aside 与 Write-Through 接入：改造 `server/tools/stock.py`：
+    - `stock_search`：返回结果自动透明持久化入 `stocks` 表；
+    - `stock_quote`：智能交易时间识别（盘中工作日 09:15-15:05 采用 180s TTL，盘后及周末永久直读本地快照，免重复请求外网）；
+    - `stock_kline`：比对本地已有最新日期，增量拉取缺失区间并持久化；
+  - Agent 集成与免批放行：
+    - 在 `server/agent/core.py` 注册全部 14 个量化金融与持久化工具；
+    - 更新 `SYSTEM_PROMPT_TEMPLATE` 投研与结构化数据跨会话复用指南，指导 Agent 在常规分析时复用预定义表，在遭遇未定义非标维度（如上游生鲜乳周价、高管增减持等）时自主调用 `sqlite_execute` 建表存储；
+  - 测试闭环：新增 `tests/test_finance_db.py`（13 项全绿），后端 120 个单测 100% 通过。
+- [x] HITL 权限引擎安全目录写入与 Python Bash 命令自动免批放行 — 2026-10-01
+  - 核心痛点解决：消除 Agent 在当前任务工作区生成/修改交付文件（Write/Edit）以及通过 Bash 执行 Python 快速测算时频繁打扰、阻塞对话的弹窗问题；
+  - 引擎与规则机制重构：
+    - 在安全模式（`dangerous`）下将 AgentScope 权限模式切换为 `PermissionMode.ACCEPT_EDITS`；
+    - 将当前任务的 `workspace_dir` 和全局长期记忆目录 `memory_dir` 注册至 `PermissionContext.working_directories`；
+    - 针对 `Write` 与 `Edit` 工具在系统默认中注入白名单规则，确保安全目录下的所有产物写入直接通过；
+    - 针对 `Bash` 工具注入 Python 执行白名单（`python:*`、`python3:*`、`sys.executable:*`、`/usr/bin/python3:*` 等前缀规则），直接放行 Python 脚本与单行计算；
+  - 严格安全边界保留：
+    - 针对工作区外的敏感目录（如 `/etc/shadow`）写操作依然触发人工确认；
+    - 针对 Bash 中的破坏性危险命令（如 `rm -rf`、提权、注入攻击等）保留 bypass-immune 拦截；
+  - 提示词与错误预防优化：
+    - 在 `SYSTEM_PROMPT_TEMPLATE` 补充计算格式化指导，强调运行 Python 格式化包含百分号「%」的文本时使用 f-string，避免因 `%` 格式化未转义引发 `ValueError: unsupported format character` 异常；
+  - 单元测试覆盖：在 `tests/test_mcp.py` 扩充 `test_workspace_writes_and_python_bash_allowed_in_dangerous_mode`，后端 107 个 pytest 单测 100% 通过。
+- [x] 腾讯股票 Native Toolkit（内置原生工具集）落地与测试闭环 — 2026-10-01
+  - 设计文档与选型：编写 [`docs/specs/2026-10-01-tencent-stock-tavily-hybrid-design.md`](docs/specs/2026-10-01-tencent-stock-tavily-hybrid-design.md)，对比 Skill、Tool、MCP 优劣，确立原生 Native Tool 作为核心执行底座；
+  - 核心工具落盘：创建 `server/tools/stock.py`，完整实现 7 大量化金融工具：
+    - `stock_search`：模糊匹配名称/拼音代码，自动 Unicode 解码；
+    - `stock_quote`：实时行情、估值指标（PE/PB/市值/股息率）、外盘/内盘主动买卖量；
+    - `stock_batch_quotes`：多股横向对比；
+    - `stock_kline`：历史 K 线序列（支持日/周/月/分与前/后复权）；
+    - `stock_minute`：当日与多日逐分钟分时走势与均价；
+    - `stock_handicap`：大单/小单盘口买卖比例；
+    - `market_index_overview`：上证/深成/创业板/科创50/沪深300/恒指等宏观大盘指数快照；
+  - 缓存与容错：内置轻量 TTL 内存缓存防高频重复请求，支持股票代码规范化容错（`normalize_symbol`）；
+  - AgentScope 集成与免审配置：在 `server/agent/core.py` 中注册全部 7 个工具为 `FunctionTool`，配置 `PermissionBehavior.ALLOW` 免人工确认弹窗，并更新 `SYSTEM_PROMPT_TEMPLATE` 投研指引；
+  - 单元测试：新增 `tests/test_stock_tools.py`（9 项全绿），后端 pytest 106 个测试 100% 通过，前端 146 个测试 100% 通过。
 - [x] 产物预览与「新标签打开」集成 MateChat McMarkdownCard 渲染 Markdown 文件 — 2026-10-01
   - 设计文档与规范：编写 [`docs/specs/2026-10-01-artifact-markdown-preview-design.md`](docs/specs/2026-10-01-artifact-markdown-preview-design.md)，补充 3.4 节《“新标签打开”独立预览页设计》；
   - 预览栏组件接入：在 `frontend/src/components/artifacts/PreviewPane.vue` 中引入 `@matechat/core` 的 `McMarkdownCard`，开启 `:enable-mermaid="true"`，支持 Markdown 标题、列表、加粗、代码块及数据表格排版；
