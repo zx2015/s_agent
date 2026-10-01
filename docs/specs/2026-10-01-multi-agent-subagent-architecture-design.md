@@ -1,8 +1,8 @@
 # Multi-Agent 动态子智能体运行时 (Dynamic Sub-Agent Runtime) 与 LLM Wiki 知识沉淀架构设计规范
 
-> **规范版本**：v2.2  
+> **规范版本**：v2.3  
 > **创建日期**：2026-10-01  
-> **更新日期**：2026-10-01（重大架构精简：确立主 Agent 极简工具链，专业工具全面下沉至工具池）  
+> **更新日期**：2026-10-01（根据架构审查全面补全：隔离机制与凭证传递、HITL 防越权沙箱、分级超时与轮数策略、Wiki 防二次膨胀汇报契约、命名风格一致化）  
 > **目标分支**：`feat/multi-agent`  
 > **状态**：方案设计中（待确认后实施编码）  
 > **责任范围**：`server/agent/subagents/`、`server/agent/tools_subagent.py`、`server/agent/tools_wiki.py`、`server/service/wiki_store.py`、`server/agent/core.py`、`tests/test_subagents.py`
@@ -33,8 +33,9 @@
 - **动态子智能体运行时（Dynamic Sub-Agent Runtime / JIT Sub-Agent）**：
   - 主 Agent 通过统一委派工具 `delegate_task(role, instruction, allowed_tools, base_template)` 动态召唤任意领域专家；
   - 子智能体在纯净、隔离的短命上下文容器中执行，完成后向主 Agent 提交结构化报告并销毁子上下文，主会话零污染。
-- **LLM Wiki 范式知识沉淀**：
-  - 引入 Andrej Karpathy 提出的 **LLM Wiki 架构**，子智能体在完成调研和测算后，主动将非标的定性认知、行业逻辑、竞争格局与分析底稿编译沉淀为互联的 Markdown 维基网络（`data/wiki/`），实现**跨会话的知识复利增长**。
+- **全量落维基，高密摘要回传（Anti-Context Bloat Reporting）**：
+  - 彻底杜绝子 Agent 将 1~2 万字爬虫原文抛回给主 Agent 引发主 Context 二次爆炸；
+  - 子 Agent 将详尽底稿落盘维基（`data/wiki/`），仅回传 300~600 字的高浓度结构化摘要与文件路径，主 Agent 按需查阅。
 - **自适应任务主题命名交付**：
   - 严禁机械套用模板名，主 Agent 严格根据用户具体提问自适应生成见名知义的交付研报（如 `乳制品行业_伊利与蒙牛_核心财务与竞争格局对比.md`）并落盘工作区供右侧面板预览。
 
@@ -69,7 +70,8 @@
 │   │ 沙箱工具: web_search,     │      │ 沙箱工具: python_calc,    │     │
 │   │          wiki_tools       │      │          finance_db       │     │
 │   │ 独立上下文: 阅后即焚      │      │ 独立上下文: 阅后即焚      │     │
-│   │ 提交: 《调研事实清单》    │      │ 提交: 《财务测算底稿》    │     │
+│   │ 沉淀: 全量入 data/wiki/   │      │ 沉淀: 指标入DB/底稿入Wiki │     │
+│   │ 汇报: 300~600字高密摘要   │      │ 汇报: 300~600字精算摘要   │     │
 │   └─────────────┬─────────────┘      └─────────────┬─────────────┘     │
 └─────────────────┼──────────────────────────────────┼───────────────────┘
                   │                                  │
@@ -78,7 +80,7 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                  下沉的底层工具资源池 (Specialized Tool Pool)           │
 │                                                                        │
-│  • web_search:    Tavily 搜索 (tavily-search), 网页提取 (tavily-extract)│
+│  • web_search:    mcp__tavily__tavily-search, tavily-extract           │
 │  • stock_market:  stock_quote, stock_kline, stock_minute, stock_handicap│
 │  • python_calc:   受限 Bash/Python 环境, calculate 精准计算器          │
 │  • finance_db:    SQLite 事实表读写, finance_record_metric, sql 查询    │
@@ -104,30 +106,9 @@
 
 ---
 
-## 3. 工具分层矩阵：主 Agent 与下沉工具池对比
+## 3. 动态子智能体运行时架构深水区设计
 
-| 层次 | 工具名称 | 挂载对象 | 职责与定位 |
-| :--- | :--- | :--- | :--- |
-| **主指挥层<br>(Lean Orchestrator)** | **`delegate_task`** | **主 Agent** | 唯一委派入口：动态召唤子智能体并注入 Prompt 与工具沙箱 |
-| | `TaskCreate`<br>`TaskUpdate`<br>`TaskList`<br>`TaskGet` | **主 Agent** | 任务大纲编排与推进状态流转（与前端中栏待办卡片实时同步） |
-| | `Write`<br>`Read`<br>`Edit`<br>`Glob` | **主 Agent** | 汇总各子任务底稿，起草自适应命名的最终研报，落盘至 `{workspace_dir}/` |
-| | `AskUser` | **主 Agent** | 关键需求模糊时向用户澄清提问 |
-| | `wiki_query`<br>`wiki_read` | **主 Agent** | 规划前轻量检索维基总索引（`index.md`），查阅是否已有历史调研沉淀 |
-| **下沉资源池<br>(Specialized Tool Pool)** | `mcp__tavily__tavily-search`<br>`mcp__tavily__tavily-extract` | **子智能体按需领用** | 全网新闻、研报爬取与权威网页长文清洗（别名：`web_search`） |
-| | `stock_quote`<br>`stock_kline`<br>`stock_minute`<br>`stock_handicap`<br>`stock_batch_quotes`<br>`market_index_overview` | **子智能体按需领用** | 腾讯行情 API、复权 K 线、分时量价、五档盘口（别名：`stock_market`） |
-| | `Bash` (Python 白名单)<br>`calculate` | **子智能体按需领用** | 报表勾稽穿透、DCF 估值建模、精确数学计算（别名：`python_calc`） |
-| | `finance_record_metric`<br>`finance_overview`<br>`finance_watchlist`<br>`sqlite_query`<br>`sqlite_execute` | **子智能体按需领用** | SQLite 结构化指标库查询与测算事实持久化（别名：`finance_db`） |
-| | `wiki_save_page` | **子智能体按需领用** | 将定性事实、行业逻辑与测算底稿沉淀入维基（别名：`wiki_mutate`） |
-
-> **架构对比收益**：
-> - **主 Agent 注册工具数**：由原先的近 **30 个** 剧降至 **11~12 个**，Tool Schema 提示词体积缩减 **70% 以上**；
-> - **主会话纯净度**：主会话中不再出现任何长篇 HTML 网页抓取、Python 调试报错或密集 SQL 语句，主会话 Context 消耗降低 **50%~80%**。
-
----
-
-## 4. 动态子智能体委派工具设计：`delegate_task`
-
-### 4.1 统一工具契约（Tool Schema）
+### 3.1 统一工具契约（Tool Schema）
 
 ```python
 def delegate_task(
@@ -135,6 +116,8 @@ def delegate_task(
     instruction: str,
     allowed_tools: list[str],
     base_template: str = "general",
+    timeout_seconds: int = 0,
+    max_iters: int = 0,
     persist_to_wiki: bool = True,
 ) -> str:
     """
@@ -146,46 +129,152 @@ def delegate_task(
         instruction: 主 Agent 下达的具体任务目标、分析范围与交付要求
         allowed_tools: 授权该子智能体使用的工具组别名（web_search, stock_market, python_calc, finance_db, wiki_tools）或单个工具名
         base_template: 基础底座模板类型，可选值:
-                       - "research": 适合搜索、研报解读与定性分析
-                       - "finance": 适合数据建模、报表核算与公式计算
-                       - "general": 通用分析与代码任务
-                       - "reviewer": 批判性审查与逻辑挑刺
+                       - "research": 适合搜索、研报解读与定性分析（默认超时 300s, max_iters=15）
+                       - "finance": 适合数据建模、报表核算与公式计算（默认超时 180s, max_iters=10）
+                       - "reviewer": 批判性审查与逻辑挑刺（默认超时 120s, max_iters=8）
+                       - "general": 通用分析与代码任务（默认超时 60s, max_iters=8）
+        timeout_seconds: 自定义超时秒数（0 表示使用模板默认值）
+        max_iters: 自定义最大推理迭代轮数（0 表示使用模板默认值）
         persist_to_wiki: 是否授权子智能体将高价值认知与测算底稿自动写入本地投研维基 data/wiki/（默认为 True）
     返回:
-        子智能体完成任务后的完整结构化分析报告与事实底稿。
+        子智能体完成任务后的高浓度结构化摘要与事实底稿路径（300~600字以内）。
     """
 ```
 
-### 4.2 双层 Prompt 组装架构
+---
 
-每个被动态唤起的 Sub-Agent，其 System Prompt 由两层拼接而成：
+### 3.2 运行时生命周期与隔离实现细节（针对 Review 核心问题解答）
 
-$$\text{Sub-Agent System Prompt} = \text{Base Template Prompt (底层基座)} + \text{Dynamic Intent Prompt (主 Agent 注入)}$$
+#### 1. 模型与凭证传递机制（Credential & Model Sharing）
+- **复用而非重复构造**：Sub-Agent 不新建不同的账户凭据，而是复用主 Agent 构建环境中的 `OpenAICredential(id="litellm-credential", name=effective_model, api_key=config.LITELLM_API_KEY, base_url=effective_base_url)`；
+- **独立 Model 实例**：为每个子智能体实例化一个全新的 `OpenAIChatModel`，使用相同的 `credential`、`OpenAIChatFormatter` 与相同的 `context_size`；
+- **`max_tokens` 强保障（规避 CLAUDE.md 第 6 陷阱）**：模型构造参数中显式设置 `parameters=OpenAIChatModel.Parameters(max_tokens=config.MODEL_MAX_TOKENS)`（例如 4096~8192），**彻底杜绝推理模型因 `max_tokens` 过小而返回空 content 的已知缺陷**。
 
-1. **底层基座模板（Base Template Prompt）**：
-   - 固化系统安全边界、排版规范（GFM）、共享工作区目录（`workspace_dir`）；
-   - 固化核心纪律（严禁心算、Python 计算使用 f-string 规避 `%` 语法错误、必须查阅本地维基优先等）；
-   - 固化“向主 Agent 提交汇报”的协议：不直接面对终端用户，在完成任务后必须输出结构化、高密度的事实底稿。
-2. **动态意图提示（Dynamic Intent Prompt）**：
-   - 注入主 Agent 传入的 `role`（如：“你现在扮演资深乳品行业分析师...”）；
-   - 注入主 Agent 传入的 `instruction`（具体标的、核心调研问题、需要测算的财务指标）。
+#### 2. 工作区与环境隔离（Workspace & CWD Isolation）
+- **共享物理产物，隔离会话状态**：
+  - 子 Agent 接收 `workspace_dir: Path`（与主会话同一目录），绑定独立的 `LocalWorkspace(workdir=str(workspace_dir))`；
+  - 子 Agent 的执行环境 block 注入该工作区绝对路径及 `data/wiki/` 绝对路径；
+  - 子 Agent 具有完全隔离的 `AgentState` 实例与独立的上下文消息数组（`state.context`），其多轮 ReAct 的中间试错消息阅后即焚，不持久化到 Redis 主会话键中。
 
-### 4.3 预置基础底座模板（Base Templates）
+#### 3. HITL 权限控制与防权限外溢（Permission Inheritance & Anti-Escalation）
+- **严禁全量绕过（No Wildcard BYPASS）**：绝不为了图省事而将子智能体设置为 `PermissionMode.BYPASS`，否则会引发“主 Agent 受控 → 子 Agent 失控”的高危安全漏洞；
+- **最小权限白名单沙箱（Least Privilege Whitelist Sandbox）**：
+  - 子智能体采用与主 Agent 一致的 `PermissionMode.ACCEPT_EDITS` 安全模式；
+  - **白名单机制**：只有主 Agent 授权的 `allowed_tools` 会被挂载到子智能体，且只放行安全读操作与在 `{workspace_dir}/**` 及 `data/wiki/**` 内的写入操作；
+  - **`Bash` 权限收紧**：子智能体中的 `Bash` 工具**仅限运行 Python 脚本和数据计算**，严禁执行系统管理命令、提权命令或在工作区外部执行写操作；
+  - **越权防御**：若子智能体企图执行白名单之外或超出工作区的操作，AgentScope 引擎直接触发权限拦截并抛出错误信息给子智能体模型，由其自主调整策略，绝不绕过安全检查。
 
-系统提供 4 个开箱即用的专业模板：
-- **`research`（调研专家模板）**：注重信源真实性、多源交叉验证、事实与观点分离、优先查阅维基并沉淀新认知；
-- **`finance`（财务估值模板）**：注重会计勾稽关系严密性、代码实测（Python / calculate）、指标落库 SQLite `stock_financial_metrics`、估值敏感性情景分析；
-- **`reviewer`（红队反思模板）**：站在反方空头视角挑刺、查找潜在商誉减值、大客户依赖与应收账款恶化风险；
-- **`general`（通用专家模板）**：通用分析、代码脚本调试与数据处理。
+---
 
-### 4.4 运行时安全防线（Anti-Recursion & Fault-Tolerance）
+### 3.3 动态超时与推理步数分级规范（Tiered Timeouts & Adaptive Max Iters）
 
-1. **防递归死循环（Anti-Recursion Guard）**：
-   - 在构建 Sub-Agent 的可用工具库时，**强制剥离 `delegate_task` 工具**；
-   - 严格限定嵌套调用深度 $\text{depth} = 1$，仅主 Agent 拥有委派权，杜绝套娃与资源耗尽。
-2. **执行上限与超时保护（Execution Limits）**：
-   - 默认超时限制 120 秒，最大推理轮数 `max_iters = 8`；
-   - 若执行意外中断或超时，安全捕获异常并返回当前已提取的阶段性结论，保证主 Agent 不被阻塞挂死。
+为解决原先 120s / 8 步一刀切导致研报抓取超时、推理模型过早截断的问题，系统采用**分级配置矩阵**：
+
+| 模板类型 (`base_template`) | 默认超时 (`timeout_seconds`) | 默认迭代步数 (`max_iters`) | 依据与设计考量 |
+| :--- | :--- | :--- | :--- |
+| **`research`** (深度行业调研) | **300 秒 (5分钟)** | **15 步** | 涵盖多轮 Tavily 搜索、5~15 篇网页提取（每篇 10~25s）、交叉比对与维基写入，需充足时间与步数。 |
+| **`finance`** (财务报表建模) | **180 秒 (3分钟)** | **10 步** | 涵盖 2~4 次 Python 脚本编写与调试、SQLite 数据提取、DCF 敏感性测算与持久化落库。 |
+| **`reviewer`** (红队风险排查) | **120 秒 (2分钟)** | **8 步** | 侧重对已收集材料的逆向审阅与逻辑挑刺，少有外部网络开销。 |
+| **`general`** (通用短任务) | **60 秒 (1分钟)** | **8 步** | 简单计算、文件格式转换或特定字段查询，追求极速响应。 |
+
+> 主 Agent 在调用 `delegate_task` 时，亦可通过显式传参 `timeout_seconds=400, max_iters=20` 覆盖默认值。
+
+---
+
+### 3.4 汇报契约与防二次膨胀机制（Anti-Context Bloat Reporting Contract）
+
+**核心治理原则：全量落维基，高密摘要回主脑（Offload to Wiki, Return Compact Summary）**。
+
+若子 Agent 爬取了 10 篇研报或生成了 1~2 万字测算底稿，**严禁**直接将全文作为 ToolResult 返回给主 Agent，否则主 Agent 的 Context Window 将立即面临二次爆炸。
+
+#### 1. 子智能体汇报标准规范（300~600 字以内）
+子智能体必须遵循统一的 4 段式汇报格式：
+
+```markdown
+### 【<子任务角色名>·交付摘要】<标的或主题>
+- **核心结论**：[3~5句话阐明最核心的定论与事实推演]
+- **关键数据指标**：[包含核心测算数值的微型表格或关键比率]
+- **维基沉淀路径**：[指明详尽底稿已写入哪个维基文件，如 `data/wiki/entities/sh600887.md` 或 `data/wiki/analyses/2024-h1-yili-fcf.md`]
+- **信源与存疑提示**：[关键信源出处、未解决的分歧或需主 Agent 留意的风险]
+```
+
+#### 2. 主 Agent 按需解压机制
+- 主 Agent 基于该 300~600 字的高浓度报告起草最终研报；
+- 若主 Agent 需进一步获取特定章节细节，可使用已有的 `wiki_read` 或 `Read` 工具**精准按需读取**对应片段，绝不一股脑塞入上下文。
+
+---
+
+### 3.5 Schema 与工具命名风格一致化规范（Naming Conventions & Schema Consistency）
+
+统一遵循标准的 Python 社区与 REST 风格：**所有工具名、别名、入参出参一律使用 `snake_case`**。
+
+#### 1. 工具组别名（Presets）与下沉工具映射矩阵
+
+```python
+TOOL_GROUP_REGISTRY: dict[str, list[str]] = {
+    "web_search": [
+        "mcp__tavily__tavily-search",
+        "mcp__tavily__tavily-extract",
+    ],
+    "stock_market": [
+        "stock_quote",
+        "stock_batch_quotes",
+        "stock_kline",
+        "stock_minute",
+        "stock_handicap",
+        "market_index_overview",
+    ],
+    "python_calc": [
+        "Bash",          # 严格绑定 Python 白名单沙箱
+        "calculate",     # 高精度数学表达式
+    ],
+    "finance_db": [
+        "finance_overview",
+        "finance_watchlist",
+        "finance_record_metric",
+        "sqlite_query",
+        "sqlite_execute",
+    ],
+    "wiki_tools": [
+        "wiki_query",
+        "wiki_read",
+        "wiki_save_page",
+    ],
+    "file_io": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+    ],
+}
+```
+
+#### 2. 统一错误返回协议（Standardized Error Payload）
+当子智能体出现超时、执行异常或权限越界时，运行时向主 Agent 返回标准格式错误：
+```json
+{
+  "status": "error",
+  "error_type": "TimeoutError | PermissionError | ExecutionError",
+  "partial_result": "子智能体在异常前已获取的阶段性结论...",
+  "suggestion": "主 Agent 可以尝试缩小搜索范围或调整指令重新委派"
+}
+```
+
+---
+
+## 4. 主协调智能体的极简工具矩阵（Lean Orchestrator Toolset）
+
+主 Agent 的角色定义纯粹为**“首席分析师 & 任务调度编排总监”**，仅保留 11~12 个管理工具：
+
+| 职责分类 | 保留工具名称 | 职责定位 |
+| :--- | :--- | :--- |
+| **调度核心** | **`delegate_task`** | 动态委派子智能体（指派角色、指令、工具沙箱白名单） |
+| **待办编排** | `TaskCreate`<br>`TaskUpdate`<br>`TaskList`<br>`TaskGet` | 负责将投研大任务拆解为推进步骤，与前端中栏待办卡片实时同步联动 |
+| **交付落盘** | `Write`<br>`Read`<br>`Edit`<br>`Glob` | 汇总各子任务底稿，起草自适应命名的最终研报，落盘至 `{workspace_dir}/` |
+| **人机交互** | `AskUser` | 遇到关键需求歧义时向用户提问澄清 |
+| **维基全局导航**| `wiki_query`<br>`wiki_read` | 规划前轻量检索维基总索引（`index.md`），查阅是否已有历史沉淀 |
+
+> 主 Agent 绝不直接挂载 `mcp__tavily__*`、`stock_*`、`Bash` 或 `sqlite_*`，彻底杜绝越俎代庖与注意力稀释。
 
 ---
 
@@ -228,7 +317,7 @@ $$\text{Sub-Agent System Prompt} = \text{Base Template Prompt (底层基座)} + 
 ```
 server/
 ├── agent/
-│   ├── core.py                   # 主 Agent 构建工厂（仅注册 11 个极简管理工具，精简 Prompt）
+│   ├── core.py                   # 主 Agent 构建工厂（仅挂载 11 个管理工具，精简 Prompt）
 │   ├── subagents/                # 动态子智能体套件目录
 │   │   ├── __init__.py           # 导出公共类
 │   │   ├── runner.py             # DynamicSubAgentRunner: 隔离上下文容器与短命执行器
@@ -280,7 +369,7 @@ server/
   - 测试防递归机制（Sub-Agent 无法解析获取 `delegate_task` 工具）；
 - **DynamicSubAgentRunner 独立执行测试**：
   - 测试动态注入 Prompt 与工具沙箱执行；
-  - 测试超时（Timeout）与异常兜底，确保主 Agent 永不挂死；
+  - 测试分级超时（research 300s, general 60s）与异常兜底，确保主 Agent 永不挂死；
 - **WikiStore 单元测试**：
   - 维基目录自动初始化、`SCHEMA.md`、`index.md` 与 `log.md` 骨架验证；
   - `save_page` 写入同时自动更新 `index.md` 索引与追加 `log.md` 日志。
@@ -300,9 +389,9 @@ server/
 
 - [ ] **Task 1**：实现 `server/service/wiki_store.py`（LLM Wiki 底层存储管理器、索引自动维护与日志审计流）；
 - [ ] **Task 2**：实现 `server/agent/tools_wiki.py`（封装 `wiki_query`, `wiki_read`, `wiki_save_page` 等原生工具）；
-- [ ] **Task 3**：实现 `server/agent/subagents/templates.py`（预设 base templates: research, finance, reviewer, general）；
-- [ ] **Task 4**：实现 `server/agent/subagents/tool_resolver.py`（构建下沉工具池与沙箱白名单解析器，剥离 `delegate_task`）；
-- [ ] **Task 5**：实现 `server/agent/subagents/runner.py`（DynamicSubAgentRunner 动态生命周期执行容器）；
+- [ ] **Task 3**：实现 `server/agent/subagents/templates.py`（预设 base templates 及分级超时/步数：research, finance, reviewer, general）；
+- [ ] **Task 4**：实现 `server/agent/subagents/tool_resolver.py`（构建下沉工具池与沙箱白名单解析器，剥离 `delegate_task`，执行权限沙箱校验）；
+- [ ] **Task 5**：实现 `server/agent/subagents/runner.py`（DynamicSubAgentRunner 动态生命周期执行容器，集成凭证共享、独立模型、防二次膨胀汇报截断与超时控制）；
 - [ ] **Task 6**：实现 `server/agent/tools_subagent.py`（封装 `delegate_task` 为主 Agent 可调用的 FunctionTool）；
 - [ ] **Task 7**：重构 `server/agent/core.py`（剥离下沉专业工具，仅为主 Agent 挂载 11 个极简管理工具，彻底精简主 Prompt 与 Token 消耗）；
 - [ ] **Task 8**：编写单元测试（`tests/test_wiki_store.py`, `tests/test_subagents.py`）并完成全量回归与实战验证。
