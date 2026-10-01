@@ -11,6 +11,11 @@
      comfortably. #57606a keeps the same "muted/secondary" role but
      clears the WCAG AA 4.5:1 threshold for normal-size text. */
   --color-text-muted: #57606a;
+
+  /* 微信聊天风格用户消息气泡配色（浅色模式） */
+  --color-user-bubble-bg: #95ec69;
+  --color-user-bubble-text: #191919;
+  --color-user-bubble-border: #85d658;
 }
 
 [data-theme='dark'] {
@@ -20,6 +25,11 @@
   --color-text: #e6edf3;
   --color-text-secondary: #9aa0a6;
   --color-text-muted: #7e868e;
+
+  /* 微信聊天风格用户消息气泡配色（深色模式） */
+  --color-user-bubble-bg: #2b6c38;
+  --color-user-bubble-text: #ffffff;
+  --color-user-bubble-border: #358043;
 }
 
 * {
