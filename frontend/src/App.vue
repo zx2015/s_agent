@@ -29,6 +29,9 @@ import ThreeColumnLayout from '@/components/layout/ThreeColumnLayout.vue'
 import SettingsDrawer from '@/components/sidebar/SettingsDrawer.vue'
 import StandaloneArtifactViewer from '@/components/artifacts/StandaloneArtifactViewer.vue'
 import { useWorkspaceStore } from '@/store/workspaces'
+import { useSessionStore } from '@/store/session'
+import { useTodosStore } from '@/store/todos'
+import { useChat } from '@/composables/useChat'
 
 const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
 const isStandaloneView = ref(urlParams.get('view') === 'artifact')
@@ -37,13 +40,32 @@ const standaloneFilePath = ref(urlParams.get('filePath') || '')
 const standaloneType = ref(urlParams.get('type') || 'markdown')
 
 const workspace = useWorkspaceStore()
+const session = useSessionStore()
+const todos = useTodosStore()
+const chat = useChat()
 
-// Populate the sidebar from the backend once on load. If the backend is
-// unreachable, the sidebar just stays empty rather than blocking the UI —
-// the workbench chrome (settings, layout) still works without it.
-onMounted(() => {
+// Populate the sidebar from the backend once on load and restore active task if persisted.
+// If the backend is unreachable, the sidebar just stays empty rather than blocking the UI.
+onMounted(async () => {
   if (!isStandaloneView.value) {
-    workspace.fetchWorkspaces().catch(() => {})
+    try {
+      await workspace.fetchWorkspaces()
+      const targetTaskId = workspace.activeTaskId
+      if (targetTaskId && workspace.findTask(targetTaskId)) {
+        session.switchToTask(targetTaskId)
+        todos.switchToTask(targetTaskId)
+        await Promise.all([
+          session.loadHistory(targetTaskId),
+          todos.loadTodos(targetTaskId),
+        ])
+        const task = workspace.findTask(targetTaskId)
+        if (task?.status === 'running' && !chat.isTaskActive(targetTaskId)) {
+          chat.reconnect(targetTaskId)
+        }
+      } else if (targetTaskId) {
+        workspace.selectTask(null)
+      }
+    } catch {}
   }
 })
 </script>

@@ -50,7 +50,15 @@ from server import config
 from server.agent.calibrator import resolve_context_size
 from server.agent.tools_subagent import create_delegate_task_tool
 from server.agent.tools_wiki import wiki_query, wiki_read
+from server.tools.calculator import calculate
 from server.tools.mcp import build_mcp_clients, parse_mcp_servers
+
+SAFE_MCP_TOOLS: set[str] = {
+    "mcp__tavily__tavily-search",
+    "mcp__tavily__tavily-extract",
+    "mcp__tavily__tavily-crawl",
+    "mcp__tavily__tavily-map",
+}
 
 # 首席分析师与任务编排总监系统提示词
 SYSTEM_PROMPT_TEMPLATE = (
@@ -243,6 +251,33 @@ async def build_agent(
         ),
     )
 
+    # 基础数学与金融计算工具（零外部依赖、确定性 AST 计算，满足主 Agent 快速测算与复验需求）
+    await toolkit.add_tool(
+        FunctionTool(
+            calculate,
+            name="calculate",
+            permission=PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message="数学与金融公式安全计算",
+            ),
+        ),
+    )
+    # 兼容大模型历史幻觉调用的别名
+    await toolkit.add_tool(
+        FunctionTool(
+            calculate,
+            name="mcp__tavily__calculate",
+            permission=PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message="数学与金融公式安全计算别名兼容",
+            ),
+        ),
+    )
+
+    # 外部通用 MCP 工具（Tavily 搜索等，满足主 Agent 轻量级即时检索与历史会话兼容）
+    for mcp_tool in mcp_tools:
+        await toolkit.add_tool(mcp_tool)
+
     # 3. 凭证与模型组装
     credential = OpenAICredential(
         id="litellm-credential",
@@ -381,8 +416,16 @@ async def build_agent(
                 ),
             )
 
-        # delegate_task 与维基高层查阅工具免人工确认直接放行
-        for auto_allowed_tool in ("delegate_task", "wiki_query", "wiki_read"):
+        # delegate_task、维基查阅、计算器及 MCP 搜索工具免人工确认直接放行
+        auto_allowed = [
+            "delegate_task",
+            "wiki_query",
+            "wiki_read",
+            "calculate",
+            "mcp__tavily__calculate",
+            *SAFE_MCP_TOOLS,
+        ]
+        for auto_allowed_tool in auto_allowed:
             agent._engine.add_rule(
                 PermissionRule(
                     tool_name=auto_allowed_tool,

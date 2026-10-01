@@ -20,10 +20,28 @@ function newTaskId(): string {
   return `task-${Date.now()}-${taskCounter}`
 }
 
+export const STORAGE_KEY_ACTIVE_TASK = 's_agent_active_task_id'
+
+function getInitialActiveTaskId(): string | null {
+  if (typeof window !== 'undefined') {
+    try {
+      const urlParams = new URLSearchParams(window.location.search)
+      const urlTaskId = urlParams.get('taskId')
+      if (urlTaskId) return urlTaskId
+    } catch {}
+  }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      return localStorage.getItem(STORAGE_KEY_ACTIVE_TASK)
+    } catch {}
+  }
+  return null
+}
+
 export const useWorkspaceStore = defineStore('workspaces', () => {
   const workspaces = ref<Workspace[]>([])
   const searchQuery = ref('')
-  const activeTaskId = ref<string | null>(null)
+  const activeTaskId = ref<string | null>(getInitialActiveTaskId())
 
   /** Workspaces with their task lists filtered by the current query and archived status. */
   const filteredWorkspaces = computed<Workspace[]>(() => {
@@ -61,8 +79,28 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     return undefined
   }
 
-  function selectTask(taskId: string): void {
+  function selectTask(taskId: string | null): void {
     activeTaskId.value = taskId
+    if (typeof localStorage !== 'undefined') {
+      try {
+        if (taskId) {
+          localStorage.setItem(STORAGE_KEY_ACTIVE_TASK, taskId)
+        } else {
+          localStorage.removeItem(STORAGE_KEY_ACTIVE_TASK)
+        }
+      } catch {}
+    }
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      try {
+        const url = new URL(window.location.href)
+        if (taskId) {
+          url.searchParams.set('taskId', taskId)
+        } else {
+          url.searchParams.delete('taskId')
+        }
+        window.history.replaceState({}, '', url.toString())
+      } catch {}
+    }
   }
 
   function renameTask(taskId: string, title: string): void {
@@ -85,7 +123,7 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     }
     // Keep the selection consistent with the visible tree.
     if (activeTaskId.value === taskId) {
-      activeTaskId.value = null
+      selectTask(null)
     }
   }
 
@@ -95,7 +133,7 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
    */
   async function archiveTaskRemote(taskId: string): Promise<void> {
     if (activeTaskId.value === taskId) {
-      activeTaskId.value = null
+      selectTask(null)
     }
     await apiClient.post<Task>(`/api/tasks/${taskId}/archive`, {})
     for (const workspace of workspaces.value) {
@@ -126,7 +164,7 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
    */
   async function deleteTaskRemote(taskId: string): Promise<void> {
     if (activeTaskId.value === taskId) {
-      activeTaskId.value = null
+      selectTask(null)
     }
     await apiClient.delete(`/api/tasks/${taskId}`)
     for (const workspace of workspaces.value) {
@@ -227,7 +265,7 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
   async function deleteWorkspaceRemote(workspaceId: string): Promise<void> {
     const workspace = workspaces.value.find((item) => item.id === workspaceId)
     if (workspace?.tasks.some((task) => task.id === activeTaskId.value)) {
-      activeTaskId.value = null
+      selectTask(null)
     }
     await apiClient.delete(`/api/workspaces/${workspaceId}`)
     const index = workspaces.value.findIndex((item) => item.id === workspaceId)

@@ -4,6 +4,7 @@ These cover the *parsing and construction* of MCP clients — pure logic
 that must not require a live MCP server. Whether the Tavily endpoint is
 actually reachable is exercised separately by the end-to-end check.
 """
+from pathlib import Path
 import pytest
 
 from server.tools.mcp import McpServerSpec, build_mcp_clients, parse_mcp_servers
@@ -183,5 +184,31 @@ async def test_subagent_sandbox_python_and_bash_permissions(tmp_path):
     calc_tool = await subagent.toolkit.get_tool("calculate")
     calc_dec = await subagent._engine.check_permission(calc_tool, {"expression": "1 + 1"})
     assert calc_dec.behavior == PermissionBehavior.ALLOW
+
+
+@pytest.mark.asyncio
+async def test_main_agent_includes_calculator_and_mcp_fallback(tmp_path: Path):
+    from unittest.mock import patch, AsyncMock
+    from server.agent.core import build_agent
+    from agentscope.state import AgentState
+    from agentscope.permission import PermissionBehavior
+
+    state = AgentState()
+    with patch("server.agent.core.resolve_context_size", new=AsyncMock(return_value=128000)):
+        agent = await build_agent(
+            workspace_dir=tmp_path,
+            state=state,
+            hitl_mode="dangerous",
+        )
+
+    # 主 Agent 必须挂载 calculate 与别名兼容工具
+    calc_tool = await agent.toolkit.get_tool("calculate")
+    assert calc_tool is not None
+    alias_tool = await agent.toolkit.get_tool("mcp__tavily__calculate")
+    assert alias_tool is not None
+
+    # calculate 工具应在 dangerous 模式下自动放行无需人工确认
+    dec = await agent._engine.check_permission(calc_tool, {"expression": "100 / 4"})
+    assert dec.behavior == PermissionBehavior.ALLOW
 
 

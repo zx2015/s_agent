@@ -80,9 +80,18 @@ describe('workspace store', () => {
     expect(store.filteredWorkspaces[0].tasks[0].id).toBe('t1')
   })
 
-  it('selects a task', () => {
+  it('selects a task and persists to localStorage and URL', () => {
     store.selectTask('t2')
     expect(store.activeTaskId).toBe('t2')
+    expect(localStorage.getItem('s_agent_active_task_id')).toBe('t2')
+    expect(window.location.search).toContain('taskId=t2')
+  })
+
+  it('restores activeTaskId from localStorage upon store creation', () => {
+    setActivePinia(createPinia())
+    localStorage.setItem('s_agent_active_task_id', 't1')
+    const fresh = useWorkspaceStore()
+    expect(fresh.activeTaskId).toBe('t1')
   })
 
   it('renames a task', () => {
@@ -95,12 +104,15 @@ describe('workspace store', () => {
     expect(store.findTask('t1')).toBeUndefined()
   })
 
-  it('clears a dangling active selection when its task is archived', () => {
+  it('clears a dangling active selection and storage when its task is archived', () => {
     // Otherwise the chat pane keeps rendering a task the sidebar no longer
     // shows, and the user has no way back to a consistent state.
     store.selectTask('t2')
+    expect(localStorage.getItem('s_agent_active_task_id')).toBe('t2')
     store.archiveTask('t2')
     expect(store.activeTaskId).toBeNull()
+    expect(localStorage.getItem('s_agent_active_task_id')).toBeNull()
+    expect(window.location.search).not.toContain('taskId=t2')
   })
 
   it('creates a task in the given workspace', () => {

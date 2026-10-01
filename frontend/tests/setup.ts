@@ -17,3 +17,16 @@ class ResizeObserverStub {
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
 }
+
+beforeEach(() => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.clear()
+  }
+  if (typeof window !== 'undefined' && window.history?.replaceState) {
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('taskId')
+      window.history.replaceState({}, '', url.toString())
+    } catch {}
+  }
+})
