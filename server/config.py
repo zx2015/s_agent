@@ -18,7 +18,7 @@ load_dotenv(REPO_ROOT / ".env")
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1")
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 MODEL_NAME = os.getenv("S_AGENT_MODEL_NAME", "v-flash")
-MODEL_MAX_TOKENS = int(os.getenv("S_AGENT_MODEL_MAX_TOKENS", "2048"))
+MODEL_MAX_TOKENS = int(os.getenv("S_AGENT_MODEL_MAX_TOKENS", "8192"))
 
 # A separate, deliberately small/cheap model for one-shot, low-stakes text
 # generation (currently: auto-titling a new conversation from its first

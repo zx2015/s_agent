@@ -3,7 +3,7 @@
     <ArtifactTabs v-model:active-tab="activeTab" />
 
     <div class="pane-body">
-      <PreviewPane v-if="activeTab === 'preview'" :artifact="activeArtifact" />
+      <PreviewPane v-if="activeTab === 'preview'" :artifact="activeArtifact" :task-id="taskId" />
       <TodoPanel v-else-if="activeTab === 'todos'" />
       <FileTreePane v-else-if="activeTab === 'files'" :task-id="taskId" />
       <DiffPane v-else-if="activeTab === 'diff'" :task-id="taskId" />

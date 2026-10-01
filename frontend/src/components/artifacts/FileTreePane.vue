@@ -18,6 +18,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import { useSessionStore } from '@/store/session'
 
 interface FileEntry {
   path: string
@@ -25,6 +26,7 @@ interface FileEntry {
 }
 
 const props = defineProps<{ taskId: string | null }>()
+const session = useSessionStore()
 
 const files = ref<FileEntry[]>([])
 const selectedPath = ref('')
@@ -46,6 +48,15 @@ async function loadFiles(): Promise<void> {
 
 onMounted(loadFiles)
 watch(() => props.taskId, loadFiles)
+watch(() => session.artifacts.length, loadFiles)
+watch(
+  () => session.isStreaming,
+  (streaming, prev) => {
+    if (prev && !streaming) {
+      loadFiles()
+    }
+  },
+)
 </script>
 
 <style scoped>

@@ -439,6 +439,28 @@ async def git_diff(task_id: str) -> dict:
     return {"diff": result.stdout}
 
 
+@app.get("/api/tasks/{task_id}/artifacts")
+async def list_artifacts(task_id: str) -> dict:
+    workspace = task_manager.workspace_dir(task_id)
+    if not workspace.exists():
+        return {"artifacts": []}
+
+    artifacts = []
+    for entry in sorted(workspace.rglob("*")):
+        if ".git" in entry.relative_to(workspace).parts or not entry.is_file():
+            continue
+        rel_path = str(entry.relative_to(workspace))
+        artifact_type = _ARTIFACT_TYPES.get(entry.suffix.lower(), "text")
+        artifacts.append(
+            {
+                "type": artifact_type,
+                "file_path": rel_path,
+                "url": f"/api/tasks/{task_id}/artifacts/preview/{rel_path}",
+            },
+        )
+    return {"artifacts": artifacts}
+
+
 @app.get("/api/tasks/{task_id}/artifacts/preview/{file_path:path}")
 async def preview_artifact(task_id: str, file_path: str) -> FileResponse:
     workspace = task_manager.workspace_dir(task_id)

@@ -13,6 +13,29 @@
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
 
 ## 已完成
+- [x] 产物预览与「新标签打开」集成 MateChat McMarkdownCard 渲染 Markdown 文件 — 2026-10-01
+  - 设计文档与规范：编写 [`docs/specs/2026-10-01-artifact-markdown-preview-design.md`](docs/specs/2026-10-01-artifact-markdown-preview-design.md)，补充 3.4 节《“新标签打开”独立预览页设计》；
+  - 预览栏组件接入：在 `frontend/src/components/artifacts/PreviewPane.vue` 中引入 `@matechat/core` 的 `McMarkdownCard`，开启 `:enable-mermaid="true"`，支持 Markdown 标题、列表、加粗、代码块及数据表格排版；
+  - 新标签页独立渲染：
+    - 新增独立产物阅读器 `frontend/src/components/artifacts/StandaloneArtifactViewer.vue`；
+    - 在 `frontend/src/App.vue` 接入 URL 路由判定（`?view=artifact&taskId=...&filePath=...`），新标签打开沉浸式独立阅读页；
+    - 在新标签页中完全通过 `McMarkdownCard` 渲染，具备标题徽标、源码/效果切换、一键复制、一键下载、深浅主题切换及居中自适应阅读排版；
+    - `PreviewPane.vue` 与 `SidebarRight.vue` 动态计算「新标签打开」链接，Markdown 产物自动跳转独立富文本阅读器，HTML 产物直连原生网页；
+  - 单元测试保障：在 `frontend/tests/components/Artifacts.spec.ts` 中补充测试用例，覆盖链接协议生成、StandaloneArtifactViewer 渲染、源码模式切换与网络异常重试，前端全量 146 个 Vitest 单测 100% 通过。
+- [x] 解决长文截断、产物冷加载、右侧待办/文件/产物面板闭环 — 2026-10-01
+  - 内容输出截断修复：将 `server/config.py` 中的 `MODEL_MAX_TOKENS` 默认值从 `2048` 提升至 `8192`，并在 `.env.example` 中补充说明，解除长文分析、代码与报表输出被截断的限制；
+  - 产物（Artifacts）冷加载与持久化闭环：
+    - 后端在 `server/main.py` 中新增 `GET /api/tasks/{task_id}/artifacts` 接口，按规范返回工作区现有产物列表；
+    - 前端在 `frontend/src/store/session.ts` 中实现 `loadArtifacts()`，并在 `loadHistory()` 中并行加载，彻底修复“页面刷新或切任务后产物丢失变空”的缺陷；
+    - 前端 `frontend/src/components/artifacts/FileTreePane.vue` 增加对 `session.artifacts` 与 `session.isStreaming` 的监听，实现工作区生成文件后的自动无感刷新；
+  - 任务待办规划与工作区产物交付指引：
+    - 优化 `server/agent/core.py` 中的 `SYSTEM_PROMPT_TEMPLATE`，明确区分全局长期记忆（`data/memory/`）与当前任务交付产物（`{workspace_dir}/`）；
+    - 指导 Agent 在执行产出型分析时必须将完整 Markdown 报告/HTML/代码写入当前工作区根目录，以供右侧预览与打包下载；
+    - 明确引导 Agent 在面对多步骤复杂任务时主动调用 `TaskCreate` / `TaskUpdate`，向右侧待办面板实时同步规划与推进进度；
+  - 修复伊利股份历史任务数据：
+    - 在工作区根目录下落盘完整的《伊利股份投资价值分析.md》深度投研报告；
+    - 补齐 Redis 中伊利股份历史任务的四步待办流程（搜集数据、财务测算、记忆沉淀、撰写交付报告）及完整对话总结；
+  - 测试验证：后端 97 个 pytest 单测通过，前端 138 个 Vitest 单测 100% 通过。
 - [x] Tavily MCP 检索工具默认权限安全放行（免除人工二次确认）— 2026-10-01
   - 根因定位：AgentScope 的 `PermissionMode.DEFAULT` 对未显式声明只读或权限的 MCP 工具执行默认保底（Step 6 fallback -> ASK），导致 Tavily 搜索/提取工具触发 `RequireUserConfirmEvent`；
   - 精细化放行：在 `server/agent/core.py` 中定义 `SAFE_MCP_TOOL_PREFIXES` 与 `SAFE_MCP_TOOLS`，在默认的 `dangerous` 模式下自动向 `PermissionEngine` 注入 `PermissionBehavior.ALLOW` 规则；

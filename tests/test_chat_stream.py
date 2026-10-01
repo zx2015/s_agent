@@ -93,3 +93,21 @@ async def test_archive_and_reset_context_endpoints():
             assert res3.status_code == 200
             assert res3.json() == {"ok": True}
             mock_reset.assert_awaited_once_with(task.id)
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_endpoint():
+    task = task_manager.create_task("default", "产物测试任务")
+    ws_dir = task_manager.workspace_dir(task.id)
+    (ws_dir / "test_report.md").write_text("# Test Report", encoding="utf-8")
+    (ws_dir / "index.html").write_text("<h1>Hello</h1>", encoding="utf-8")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        res = await client.get(f"/api/tasks/{task.id}/artifacts")
+        assert res.status_code == 200
+        data = res.json()
+        assert "artifacts" in data
+        assert len(data["artifacts"]) == 2
+        paths = [item["file_path"] for item in data["artifacts"]]
+        assert "test_report.md" in paths
+        assert "index.html" in paths

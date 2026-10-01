@@ -1,5 +1,11 @@
 <template>
-  <div class="app-shell">
+  <StandaloneArtifactViewer
+    v-if="isStandaloneView"
+    :task-id="standaloneTaskId"
+    :file-path="standaloneFilePath"
+    :type="standaloneType"
+  />
+  <div v-else class="app-shell">
     <McHeader class="top-bar" title="MateChat">
       <template #operationArea>
         <span v-if="workspace.activeTask" class="active-task">
@@ -17,11 +23,18 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { McHeader } from '@matechat/core'
 import ThreeColumnLayout from '@/components/layout/ThreeColumnLayout.vue'
 import SettingsDrawer from '@/components/sidebar/SettingsDrawer.vue'
+import StandaloneArtifactViewer from '@/components/artifacts/StandaloneArtifactViewer.vue'
 import { useWorkspaceStore } from '@/store/workspaces'
+
+const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
+const isStandaloneView = ref(urlParams.get('view') === 'artifact')
+const standaloneTaskId = ref(urlParams.get('taskId') || '')
+const standaloneFilePath = ref(urlParams.get('filePath') || '')
+const standaloneType = ref(urlParams.get('type') || 'markdown')
 
 const workspace = useWorkspaceStore()
 
@@ -29,7 +42,9 @@ const workspace = useWorkspaceStore()
 // unreachable, the sidebar just stays empty rather than blocking the UI —
 // the workbench chrome (settings, layout) still works without it.
 onMounted(() => {
-  workspace.fetchWorkspaces().catch(() => {})
+  if (!isStandaloneView.value) {
+    workspace.fetchWorkspaces().catch(() => {})
+  }
 })
 </script>
 

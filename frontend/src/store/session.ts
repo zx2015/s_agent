@@ -208,6 +208,27 @@ export const useSessionStore = defineStore('session', () => {
     insideThink.value = false
   }
 
+  async function loadArtifacts(taskId: string): Promise<void> {
+    try {
+      const response = await apiClient.get<{
+        artifacts: Array<{
+          type: Artifact['type']
+          file_path: string
+          url: string
+        }>
+      }>(`/api/tasks/${taskId}/artifacts`)
+      if (response && Array.isArray(response.artifacts)) {
+        artifacts.value = response.artifacts.map((item) => ({
+          type: item.type,
+          filePath: item.file_path,
+          url: item.url,
+        }))
+      }
+    } catch {
+      artifacts.value = []
+    }
+  }
+
   /**
    * Hydrate the middle pane from the backend transcript for a task.
    *
@@ -219,10 +240,13 @@ export const useSessionStore = defineStore('session', () => {
   async function loadHistory(taskId: string): Promise<void> {
     reset()
     try {
-      const response = await apiClient.get<{ messages: ChatMessage[] }>(
-        `/api/tasks/${taskId}/messages`,
-      )
-      messages.value = response.messages ?? []
+      const [msgResponse] = await Promise.all([
+        apiClient.get<{ messages: ChatMessage[] }>(
+          `/api/tasks/${taskId}/messages`,
+        ),
+        loadArtifacts(taskId),
+      ])
+      messages.value = msgResponse.messages ?? []
     } catch {
       // A failed hydrate must not break the session: start clean.
       messages.value = []
@@ -241,5 +265,6 @@ export const useSessionStore = defineStore('session', () => {
     resolveConfirm,
     reset,
     loadHistory,
+    loadArtifacts,
   }
 })
