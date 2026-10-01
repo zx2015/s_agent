@@ -78,3 +78,41 @@ def test_build_clients_constructs_one_per_spec():
 
 def test_build_clients_empty_specs():
     assert build_mcp_clients([]) == []
+
+
+@pytest.mark.asyncio
+async def test_tavily_mcp_tools_allowed_by_default_in_dangerous_mode(tmp_path):
+    from agentscope.permission import PermissionBehavior
+    from server.agent.core import build_agent
+
+    agent = await build_agent(workspace_dir=tmp_path, hitl_mode="dangerous")
+    # All Tavily MCP operations are external read-only web requests and safe
+    for tool_name in (
+        "mcp__tavily__tavily-search",
+        "mcp__tavily__tavily-extract",
+        "mcp__tavily__tavily-crawl",
+        "mcp__tavily__tavily-map",
+    ):
+        tool = await agent.toolkit.get_tool(tool_name)
+        if tool is not None:
+            decision = await agent._engine.check_permission(tool, {})
+            assert decision.behavior == PermissionBehavior.ALLOW
+
+    # High-risk mutating commands in Bash still trigger confirmation
+    bash_tool = await agent.toolkit.get_tool("Bash")
+    bash_decision = await agent._engine.check_permission(
+        bash_tool, {"command": "rm -rf foo"}
+    )
+    assert bash_decision.behavior == PermissionBehavior.ASK
+
+
+@pytest.mark.asyncio
+async def test_tavily_mcp_tools_ask_confirmation_in_always_mode(tmp_path):
+    from agentscope.permission import PermissionBehavior
+    from server.agent.core import build_agent
+
+    agent = await build_agent(workspace_dir=tmp_path, hitl_mode="always")
+    tool = await agent.toolkit.get_tool("mcp__tavily__tavily-search")
+    if tool is not None:
+        decision = await agent._engine.check_permission(tool, {})
+        assert decision.behavior == PermissionBehavior.ASK

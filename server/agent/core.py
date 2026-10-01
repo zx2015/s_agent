@@ -54,6 +54,18 @@ from server.agent.calibrator import resolve_context_size
 from server.tools.calculator import calculate
 from server.tools.mcp import build_mcp_clients, parse_mcp_servers
 
+# MCP tools that are external read-only operations and safe to run by default
+# without requiring human-in-the-loop confirmation in "dangerous" mode.
+SAFE_MCP_TOOL_PREFIXES: tuple[str, ...] = (
+    "mcp__tavily__",
+)
+SAFE_MCP_TOOLS: set[str] = {
+    "mcp__tavily__tavily-search",
+    "mcp__tavily__tavily-extract",
+    "mcp__tavily__tavily-crawl",
+    "mcp__tavily__tavily-map",
+}
+
 # This is only layer 1 of what the model actually receives as its system
 # prompt — AgentScope appends toolkit skill/offloader instructions on top
 # of this string every reply, and separately injects a runtime-state
@@ -309,6 +321,30 @@ async def build_agent(
                 )
     else:  # "dangerous" or default
         agent._engine.context.mode = PermissionMode.DEFAULT
+        # Tavily MCP 等只读网络检索工具属于安全操作，默认自动放行无需人工确认
+        allowed_tools = set(SAFE_MCP_TOOLS)
+        try:
+            schemas = await toolkit.get_tool_schemas()
+            for s in schemas:
+                tool_name = s.get("function", {}).get("name")
+                if tool_name and any(
+                    tool_name.startswith(prefix) for prefix in SAFE_MCP_TOOL_PREFIXES
+                ):
+                    allowed_tools.add(tool_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to inspect tool schemas for safe MCP tools: %s", exc
+            )
+
+        for safe_tool in allowed_tools:
+            agent._engine.add_rule(
+                PermissionRule(
+                    tool_name=safe_tool,
+                    rule_content="",
+                    behavior=PermissionBehavior.ALLOW,
+                    source="systemDefault",
+                ),
+            )
 
     agent._hitl_mode = effective_hitl_mode
     return agent
