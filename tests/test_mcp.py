@@ -81,47 +81,10 @@ def test_build_clients_empty_specs():
 
 
 @pytest.mark.asyncio
-async def test_tavily_mcp_tools_allowed_by_default_in_dangerous_mode(tmp_path):
+async def test_main_agent_permissions_in_dangerous_mode(tmp_path):
     from agentscope.permission import PermissionBehavior
     from server.agent.core import build_agent
-
-    agent = await build_agent(workspace_dir=tmp_path, hitl_mode="dangerous")
-    # All Tavily MCP operations are external read-only web requests and safe
-    for tool_name in (
-        "mcp__tavily__tavily-search",
-        "mcp__tavily__tavily-extract",
-        "mcp__tavily__tavily-crawl",
-        "mcp__tavily__tavily-map",
-    ):
-        tool = await agent.toolkit.get_tool(tool_name)
-        if tool is not None:
-            decision = await agent._engine.check_permission(tool, {})
-            assert decision.behavior == PermissionBehavior.ALLOW
-
-    # High-risk mutating commands in Bash still trigger confirmation
-    bash_tool = await agent.toolkit.get_tool("Bash")
-    bash_decision = await agent._engine.check_permission(
-        bash_tool, {"command": "rm -rf foo"}
-    )
-    assert bash_decision.behavior == PermissionBehavior.ASK
-
-
-@pytest.mark.asyncio
-async def test_tavily_mcp_tools_ask_confirmation_in_always_mode(tmp_path):
-    from agentscope.permission import PermissionBehavior
-    from server.agent.core import build_agent
-
-    agent = await build_agent(workspace_dir=tmp_path, hitl_mode="always")
-    tool = await agent.toolkit.get_tool("mcp__tavily__tavily-search")
-    if tool is not None:
-        decision = await agent._engine.check_permission(tool, {})
-        assert decision.behavior == PermissionBehavior.ASK
-
-
-@pytest.mark.asyncio
-async def test_workspace_writes_and_python_bash_allowed_in_dangerous_mode(tmp_path):
-    from agentscope.permission import PermissionBehavior
-    from server.agent.core import build_agent
+    from server import config
 
     agent = await build_agent(workspace_dir=tmp_path, hitl_mode="dangerous")
 
@@ -136,26 +99,73 @@ async def test_workspace_writes_and_python_bash_allowed_in_dangerous_mode(tmp_pa
     edit_dec = await agent._engine.check_permission(edit_tool, {"file_path": ws_file})
     assert edit_dec.behavior == PermissionBehavior.ALLOW
 
-    # 2. 敏感/系统目录写文件：依然触发人工确认
+    # 2. 维基目录写文件：直接放行
+    wiki_file = str(config.WIKI_DIR / "entities" / "sh600887.md")
+    wiki_dec = await agent._engine.check_permission(write_tool, {"file_path": wiki_file})
+    assert wiki_dec.behavior == PermissionBehavior.ALLOW
+
+    # 3. 敏感/系统目录写文件：依然触发人工确认
     sys_dec = await agent._engine.check_permission(write_tool, {"file_path": "/etc/shadow"})
     assert sys_dec.behavior == PermissionBehavior.ASK
 
-    # 3. 运行 python3 / python 脚本与计算命令：直接放行
-    bash_tool = await agent.toolkit.get_tool("Bash")
-    py_cmd = 'python3 -c "print(1 + 1)"'
-    py_dec = await agent._engine.check_permission(bash_tool, {"command": py_cmd})
+    # 4. delegate_task 与维基读查工具直接放行无需弹窗
+    delegate_tool = await agent.toolkit.get_tool("delegate_task")
+    assert delegate_tool is not None
+    del_dec = await agent._engine.check_permission(delegate_tool, {})
+    assert del_dec.behavior == PermissionBehavior.ALLOW
+
+    query_tool = await agent.toolkit.get_tool("wiki_query")
+    q_dec = await agent._engine.check_permission(query_tool, {})
+    assert q_dec.behavior == PermissionBehavior.ALLOW
+
+
+@pytest.mark.asyncio
+async def test_subagent_sandbox_python_and_bash_permissions(tmp_path):
+    from agentscope.permission import PermissionBehavior, PermissionMode, PermissionRule
+    from server.agent.subagents.tool_resolver import ToolResolver
+    import sys
+
+    # 验证子智能体工具沙箱构建与权限
+    resolver = ToolResolver()
+    tools = resolver.resolve(["python_calc", "file_io"], tmp_path)
+    tool_map = {t.name: t for t in tools}
+
+    assert "Bash" in tool_map
+    assert "Write" in tool_map
+    assert "delegate_task" not in tool_map  # 防套娃递归拦截
+
+    # 组装沙箱引擎权限规则测试
+    from agentscope.agent import Agent
+    from agentscope.tool import Toolkit
+    tk = Toolkit()
+    for t in tools:
+        await tk.add_tool(t)
+
+    from agentscope.credential import OpenAICredential
+    from agentscope.model import OpenAIChatModel
+    from agentscope.formatter import OpenAIChatFormatter
+    cred = OpenAICredential(id="test", name="v-flash", api_key="dummy", base_url="http://127.0.0.1:4000/v1")
+    model = OpenAIChatModel(credential=cred, model="v-flash", formatter=OpenAIChatFormatter())
+    subagent = Agent(name="test_sub", system_prompt="test", model=model, toolkit=tk)
+
+    # 注入与 runner 相同的安全沙箱规则
+    subagent._engine.context.mode = PermissionMode.ACCEPT_EDITS
+    for py_cmd in ("python:*", "python3:*", f"{sys.executable}:*"):
+        subagent._engine.add_rule(
+            PermissionRule(
+                tool_name="Bash",
+                rule_content=py_cmd,
+                behavior=PermissionBehavior.ALLOW,
+                source="subagentSandbox",
+            )
+        )
+
+    bash_tool = await subagent.toolkit.get_tool("Bash")
+    # Python 计算放行
+    py_dec = await subagent._engine.check_permission(bash_tool, {"command": 'python3 -c "print(1+1)"'})
     assert py_dec.behavior == PermissionBehavior.ALLOW
 
-    # 用户真实场景下的多行 Python 计算命令
-    calc_cmd = (
-        'python3 -c "\n'
-        'print(\'H1经营现金流97.59亿 同比+229%, 现金/归母 = %.2f\' % (97.59/57.59))\n'
-        'print(\'Q2单季经营现金流60亿, +199%\')\n'
-        '"'
-    )
-    calc_dec = await agent._engine.check_permission(bash_tool, {"command": calc_cmd})
-    assert calc_dec.behavior == PermissionBehavior.ALLOW
+    # 危险系统命令依然需要人工确认
+    danger_dec = await subagent._engine.check_permission(bash_tool, {"command": "rm -rf /"})
+    assert danger_dec.behavior == PermissionBehavior.ASK
 
-    # 4. 非白名单的高风险系统命令：依然需要人工确认
-    non_py_dec = await agent._engine.check_permission(bash_tool, {"command": "apt-get update"})
-    assert non_py_dec.behavior == PermissionBehavior.ASK

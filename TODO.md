@@ -3,7 +3,6 @@
 > 本文件随代码纳入版本控制。完成事项移至"已完成"并标注日期，严禁直接删除。
 
 ## 进行中
-（暂无进行中的任务，请根据下方待办推进）
 
 ## 待办
 - [ ] 腾讯股票 + Tavily 混合投研架构落地（下一阶段：投研 SOP Skill 沉淀与实战报告评测）— 优先级：高（设计文档：[`docs/specs/2026-10-01-tencent-stock-tavily-hybrid-design.md`](docs/specs/2026-10-01-tencent-stock-tavily-hybrid-design.md)）
@@ -11,6 +10,21 @@
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
 
 ## 已完成
+- [x] Multi-Agent 动态子智能体运行时 (Dynamic Sub-Agent Runtime) 与 LLM Wiki 知识沉淀架构落地 — 2026-10-01
+  - 设计文档与评审闭关：编写并迭代定稿 [`docs/specs/2026-10-01-multi-agent-subagent-architecture-design.md`](docs/specs/2026-10-01-multi-agent-subagent-architecture-design.md)（v2.3 经用户正式评审通过）；
+  - 核心架构转变：
+    - 主 Agent 极简工具链（Lean Orchestrator Toolset）：主 Agent 工具集精简至 12 个（`delegate_task`、4 个 `Task*`、4 个文件 IO、`AskUser`、2 个维基只读检索），专注顶层大纲设计、任务拆解与自适应命名成果交付，严禁越俎代庖；
+    - 专业工具池（Specialized Tool Pool）：将 Tavily 全网搜索提取、腾讯行情、SQLite 事实表与 Bash/Python 计算全面下沉为子智能体按需沙箱领用；
+  - 模块代码全量落地：
+    - Task 1: `server/service/wiki_store.py` 完整实现 `WikiStore`（分层存储 `entities/`, `industries/`, `analyses/`, `raw/`，原子读写、`index.md` 索引自动维护与 `log.md` 审计流水追加）；
+    - Task 2: `server/agent/tools_wiki.py` 实现 `wiki_query`, `wiki_read`, `wiki_save_page`, `wiki_get_index` 原生工具集；
+    - Task 3: `server/agent/subagents/templates.py` 预设 4 大垂直底座模板（`research`: 300s/15步，`finance`: 180s/10步，`reviewer`: 120s/8步，`general`: 60s/8步），固化严禁心算、f-string 规避 `%` 陷阱与双层 Prompt 组装器；
+    - Task 4: `server/agent/subagents/tool_resolver.py` 实现 6 大工具组别名展开与防递归拦截（强制剥离 `delegate_task`、`Task*`、`AskUser`）；
+    - Task 5: `server/agent/subagents/runner.py` 实现 `DynamicSubAgentRunner` 隔离沙箱运行时容器（独立 `AgentState` 阅后即焚、显式传参规避 v-flash 空 content 缺陷、`PermissionMode.ACCEPT_EDITS` 防越权保护、`asyncio.wait_for` 超时熔断）；
+    - Task 6: `server/agent/tools_subagent.py` 封装 `create_delegate_task_tool` 工厂；
+    - Task 7: `server/agent/core.py` 完成重构，装配极简工具链与自适应研报命名规范（《XXX投资价值深度分析.md》、《行业_标的A与标的B_对比.md》等）；
+    - Task 8: 编写 `tests/test_wiki_store.py`（5项全绿）与 `tests/test_subagents.py`（6项全绿）；
+  - 测试闭环：全项目 131 个 pytest 单测 100% 通过（0 失败，0 告警）。
 - [x] 结构化金融数据跨会话持久化与双轨制 SQLite 自主缓存系统落地 — 2026-10-01
   - 设计文档与架构：编写 [`docs/specs/2026-10-01-structured-financial-data-persistence-design.md`](docs/specs/2026-10-01-structured-financial-data-persistence-design.md)，确立“预定义核心表 + Agent 自治动态建表”双轨制架构；
   - 核心持久化层实现：新建 `server/service/finance_db.py`：

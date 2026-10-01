@@ -111,3 +111,13 @@ FINANCE_DB_PATH = Path(
     os.getenv("S_AGENT_FINANCE_DB_PATH", str(REPO_ROOT / "data" / "finance.db")),
 )
 
+# --- LLM Wiki 投研知识沉淀体系 ---
+# 存放 Karpathy 范式 LLM Wiki 的根目录（包含 SCHEMA.md, index.md, log.md, entities/, industries/, analyses/, raw/）
+WIKI_DIR = Path(
+    os.getenv("S_AGENT_WIKI_DIR", str(REPO_ROOT / "data" / "wiki")),
+)
+
+# --- 动态子智能体运行时配置 ---
+SUBAGENT_MAX_ITERS = int(os.getenv("S_AGENT_SUBAGENT_MAX_ITERS", "15"))
+SUBAGENT_TIMEOUT_SECONDS = int(os.getenv("S_AGENT_SUBAGENT_TIMEOUT_SECONDS", "300"))
+

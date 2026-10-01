@@ -18,8 +18,10 @@ from server.tools.stock import (
 
 
 @pytest.fixture(autouse=True)
-def clear_stock_cache():
+def clear_stock_cache(monkeypatch):
     _CACHE.clear()
+    monkeypatch.setattr("server.tools.stock.finance_db.get_latest_daily_quote", lambda *args, **kwargs: None)
+    monkeypatch.setattr("server.tools.stock.finance_db.get_kline_records", lambda *args, **kwargs: [])
     yield
     _CACHE.clear()
 
@@ -164,14 +166,11 @@ def test_market_index_overview(mock_http):
 
 
 @pytest.mark.asyncio
-async def test_build_agent_registers_all_stock_tools(tmp_path):
-    from server.agent.core import build_agent
-    agent = await build_agent(workspace_dir=tmp_path)
-    schemas = await agent.toolkit.get_tool_schemas()
-    tool_names = {
-        s["function"]["name"] if "function" in s else s.get("name")
-        for s in schemas
-    }
+async def test_subagent_resolver_registers_all_stock_tools(tmp_path):
+    from server.agent.subagents.tool_resolver import ToolResolver
+    resolver = ToolResolver()
+    tools = resolver.resolve(["stock_market"], tmp_path)
+    tool_names = {t.name for t in tools}
     expected_tools = {
         "stock_search",
         "stock_quote",
@@ -182,3 +181,23 @@ async def test_build_agent_registers_all_stock_tools(tmp_path):
         "market_index_overview",
     }
     assert expected_tools.issubset(tool_names)
+
+
+@pytest.mark.asyncio
+async def test_build_agent_registers_lean_orchestrator_tools(tmp_path):
+    from server.agent.core import build_agent
+    agent = await build_agent(workspace_dir=tmp_path)
+    schemas = await agent.toolkit.get_tool_schemas()
+    tool_names = {
+        s["function"]["name"] if "function" in s else s.get("name")
+        for s in schemas
+    }
+    # Lean main agent tools
+    assert "delegate_task" in tool_names
+    assert "wiki_query" in tool_names
+    assert "wiki_read" in tool_names
+    assert "TaskCreate" in tool_names
+    assert "Write" in tool_names
+    # Low-level tools offloaded to sub-agents
+    assert "stock_quote" not in tool_names
+    assert "Bash" not in tool_names
