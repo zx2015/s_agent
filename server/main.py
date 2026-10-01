@@ -402,6 +402,28 @@ async def confirm_task(task_id: str, payload: ConfirmRequest) -> dict:
     return {"ok": True}
 
 
+IGNORED_WORKSPACE_PARTS = {
+    ".git",
+    "sessions",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "node_modules",
+}
+
+
+def _is_internal_workspace_entry(entry: Path, workspace: Path) -> bool:
+    try:
+        parts = entry.relative_to(workspace).parts
+    except ValueError:
+        return True
+    for part in parts:
+        if part.startswith(".") or part in IGNORED_WORKSPACE_PARTS:
+            return True
+    return False
+
+
 @app.get("/api/tasks/{task_id}/files")
 async def list_files(task_id: str) -> dict:
     workspace = task_manager.workspace_dir(task_id)
@@ -410,7 +432,7 @@ async def list_files(task_id: str) -> dict:
 
     files = []
     for entry in sorted(workspace.rglob("*")):
-        if ".git" in entry.relative_to(workspace).parts:
+        if _is_internal_workspace_entry(entry, workspace):
             continue
         files.append(
             {
@@ -447,7 +469,7 @@ async def list_artifacts(task_id: str) -> dict:
 
     artifacts = []
     for entry in sorted(workspace.rglob("*")):
-        if ".git" in entry.relative_to(workspace).parts or not entry.is_file():
+        if _is_internal_workspace_entry(entry, workspace) or not entry.is_file():
             continue
         rel_path = str(entry.relative_to(workspace))
         artifact_type = _ARTIFACT_TYPES.get(entry.suffix.lower(), "text")
@@ -465,7 +487,11 @@ async def list_artifacts(task_id: str) -> dict:
 async def preview_artifact(task_id: str, file_path: str) -> FileResponse:
     workspace = task_manager.workspace_dir(task_id)
     resolved = _safe_resolve(workspace, file_path)
-    if resolved is None or not resolved.is_file():
+    if (
+        resolved is None
+        or not resolved.is_file()
+        or _is_internal_workspace_entry(resolved, workspace)
+    ):
         raise HTTPException(status_code=404, detail="artifact not found")
     return FileResponse(resolved)
 
@@ -480,7 +506,7 @@ async def download_all(task_id: str) -> FileResponse:
     archive_path = Path(f"{archive_base}.zip")
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for entry in workspace.rglob("*"):
-            if ".git" in entry.relative_to(workspace).parts:
+            if _is_internal_workspace_entry(entry, workspace):
                 continue
             if entry.is_file():
                 archive.write(entry, entry.relative_to(workspace))
@@ -530,7 +556,7 @@ def _new_artifact_frames(task_id: str, since_ts: float):
     frames = []
     found_any = False
     for entry in sorted(workspace.rglob("*")):
-        if ".git" in entry.relative_to(workspace).parts or not entry.is_file():
+        if _is_internal_workspace_entry(entry, workspace) or not entry.is_file():
             continue
         if entry.stat().st_mtime < since_ts:
             continue

@@ -101,6 +101,11 @@ async def test_list_artifacts_endpoint():
     ws_dir = task_manager.workspace_dir(task.id)
     (ws_dir / "test_report.md").write_text("# Test Report", encoding="utf-8")
     (ws_dir / "index.html").write_text("<h1>Hello</h1>", encoding="utf-8")
+    # Simulate AgentScope ContextOffload sessions directory and internal files
+    sessions_dir = ws_dir / "sessions" / "9ed720a1b0dc48d4abf86da9bc5d2237"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "tool_result-call_12345.txt").write_text("intermediate tool dump", encoding="utf-8")
+    (ws_dir / ".gitkeep").write_text("", encoding="utf-8")
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         res = await client.get(f"/api/tasks/{task.id}/artifacts")
@@ -111,3 +116,18 @@ async def test_list_artifacts_endpoint():
         paths = [item["file_path"] for item in data["artifacts"]]
         assert "test_report.md" in paths
         assert "index.html" in paths
+        assert not any("sessions" in p for p in paths)
+        assert not any(p.startswith(".") for p in paths)
+
+        # Direct preview of internal file must be rejected (404)
+        preview_res = await client.get(
+            f"/api/tasks/{task.id}/artifacts/preview/sessions/9ed720a1b0dc48d4abf86da9bc5d2237/tool_result-call_12345.txt"
+        )
+        assert preview_res.status_code == 404
+
+        # list_files must also exclude internal sessions
+        files_res = await client.get(f"/api/tasks/{task.id}/files")
+        assert files_res.status_code == 200
+        file_paths = [f["path"] for f in files_res.json()["files"]]
+        assert not any("sessions" in p for p in file_paths)
+
