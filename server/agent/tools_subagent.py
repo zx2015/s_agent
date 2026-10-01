@@ -4,6 +4,7 @@
 为主协调智能体（Main Orchestrator Agent）提供统一的任务委派接口 `delegate_task`，
 支持动态注入专属角色、特定指令、工具沙箱白名单及底座模板。
 """
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, List, Optional
@@ -57,8 +58,10 @@ def create_delegate_task_tool(
         返回:
             子智能体完成任务后产出的高密度结构化交付摘要与文件底稿路径。
         """
+        start_time = asyncio.get_running_loop().time()
         logger.info(
-            f"主 Agent 调用 delegate_task: 委派 [{role}] (template={base_template}, tools={allowed_tools})"
+            f"主 Agent 调用 delegate_task: 委派 [{role}] (template={base_template}, "
+            f"timeout={timeout_seconds}s, max_iters={max_iters}, tools={allowed_tools})"
         )
 
         runner = DynamicSubAgentRunner(
@@ -76,7 +79,13 @@ def create_delegate_task_tool(
             persist_to_wiki=persist_to_wiki,
         )
 
-        return await runner.run()
+        res = await runner.run()
+        elapsed = asyncio.get_running_loop().time() - start_time
+        summary_preview = res[:150].replace("\n", " ") if res else "<empty>"
+        logger.info(
+            f"子智能体 [{role}] 汇报完成 (耗时 {elapsed:.1f}s, 返回字符数 {len(res)}): {summary_preview}..."
+        )
+        return res
 
     return FunctionTool(
         delegate_task,

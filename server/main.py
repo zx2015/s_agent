@@ -33,6 +33,7 @@ from server.schemas.chat import (
     UpdateTaskRequest,
     WorkspaceOut,
 )
+from server.service.active_turns import active_turn_manager
 from server.service.events import (
     AgentEventTranslator,
     final_todos_changed_frame,
@@ -62,9 +63,16 @@ async def health() -> dict:
 
 @app.get("/api/workspaces")
 async def list_workspaces() -> dict:
+    raw_workspaces = task_manager.list_workspaces()
+    for ws in raw_workspaces:
+        for t in ws.get("tasks", []):
+            if active_turn_manager.is_running(t.get("id", "")):
+                t["status"] = "running"
+            elif t.get("status") == "running":
+                t["status"] = "completed"
     workspaces = [
         WorkspaceOut(**workspace).model_dump(by_alias=True)
-        for workspace in task_manager.list_workspaces()
+        for workspace in raw_workspaces
     ]
     return {"workspaces": workspaces}
 
@@ -144,12 +152,14 @@ async def reset_task_context(task_id: str) -> dict:
     task = task_manager.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
+    await active_turn_manager.abort(task_id)
     await task_manager.reset_context(task_id)
     return {"ok": True}
 
 
 @app.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str) -> dict:
+    await active_turn_manager.abort(task_id)
     deleted = await task_manager.delete_task(task_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="task not found")
@@ -202,6 +212,9 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
         )
     await lock.acquire()
 
+    task_manager.update_task(payload.task_id, status="running")
+    turn = active_turn_manager.create_turn(payload.task_id, lock=lock)
+
     # Every task is created with the same placeholder title ("新任务" —
     # see `SidebarLeft.vue`/`WorkspaceTree.vue`/`useChat.ts`'s
     # `ensureActiveTask`, all three task-creation paths use it), so it
@@ -214,7 +227,22 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
     if task.title == "新任务":
         title_task = asyncio.create_task(generate_title(payload.message))
 
-    async def _generate():
+    async def _title_worker():
+        if title_task is None:
+            return
+        try:
+            new_title = await title_task
+            task_manager.update_task(payload.task_id, title=new_title)
+            await turn.broadcast(sse_frame("task_renamed", {"title": new_title}))
+        except Exception:
+            # 标题生成失败不影响核心对话流
+            pass
+
+    title_worker_task = asyncio.create_task(_title_worker()) if title_task is not None else None
+    turn.title_worker_task = title_worker_task
+
+    async def _agent_worker():
+        turn_started_at = time.time()
         try:
             agent = await task_manager.get_or_create_agent(
                 payload.task_id,
@@ -223,114 +251,44 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 hitl_mode=payload.hitl_mode,
             )
         except Exception as exc:  # noqa: BLE001 - e.g. missing API key
-            yield sse_frame("text_delta", {"text": f"[后端配置错误: {exc}]"})
-            yield sse_frame("done", {"task_status": "failed"})
+            task_manager.update_task(payload.task_id, status="failed")
+            await turn.broadcast(sse_frame("text_delta", {"text": f"[后端配置错误: {exc}]"}))
+            await turn.broadcast(sse_frame("done", {"task_status": "failed"}))
             return
 
-        queue: asyncio.Queue[str | object] = asyncio.Queue()
-        sentinel = object()
+        translator = AgentEventTranslator()
+        inputs = Msg(
+            name="user",
+            role="user",
+            content=[TextBlock(type="text", text=payload.message)],
+        )
 
-        async def _title_worker():
-            if title_task is None:
-                return
-            try:
-                new_title = await title_task
-                task_manager.update_task(payload.task_id, title=new_title)
-                await queue.put(sse_frame("task_renamed", {"title": new_title}))
-            except Exception:
-                # 标题生成失败不影响核心对话流
-                pass
+        try:
+            while True:
+                pending_reply_id: str | None = None
+                pending_tool_calls = None
 
-        title_worker_task: asyncio.Task | None = None
-        if title_task is not None:
-            title_worker_task = asyncio.create_task(_title_worker())
-
-        async def _agent_worker():
-            translator = AgentEventTranslator()
-            turn_started_at = time.time()
-            inputs = Msg(
-                name="user",
-                role="user",
-                content=[TextBlock(type="text", text=payload.message)],
-            )
-
-            try:
-                while True:
-                    pending_reply_id: str | None = None
-                    pending_tool_calls = None
-
-                    async for event in agent.reply_stream(inputs):
-                        if isinstance(event, RequireUserConfirmEvent):
-                            pending_reply_id = event.reply_id
-                            pending_tool_calls = event.tool_calls
-                            for frame in translator.translate(event):
-                                await queue.put(frame)
-                            break
-
-                        # Translate the event into SSE frames. Tools that
-                        # ended during this iteration get their buffer
-                        # popped by the translator; we capture the tool name
-                        # before/after to decide whether to send a fresh
-                        # `task_todos_changed` snapshot.
-                        tool_name_after: str | None = None
-                        if isinstance(event, ToolResultEndEvent):
-                            # Peek at the buffer the translator is about to pop.
-                            buf = translator._buffers.get(event.tool_call_id)
-                            tool_name_after = buf.tool_name if buf else None
-
-                        if isinstance(event, ReplyEndEvent):
-                            # 1. 确保任务重命名在完成前到达（若尚未完成则最多等 2 秒）
-                            if title_worker_task is not None and not title_worker_task.done():
-                                try:
-                                    await asyncio.wait_for(
-                                        asyncio.shield(title_worker_task),
-                                        timeout=2.0,
-                                    )
-                                except Exception:
-                                    pass
-
-                            # 2. 推送可能生成的新工件
-                            for frame in _new_artifact_frames(
-                                payload.task_id,
-                                turn_started_at,
-                            ):
-                                await queue.put(frame)
-
-                            # 3. 推送最终的 todo 状态快照
-                            await queue.put(
-                                final_todos_changed_frame(
-                                    serialize_todos(agent.state),
-                                )
-                            )
-
-                            # 4. 推送 done 结束帧
-                            for frame in translator.translate(event):
-                                await queue.put(frame)
-
-                            await task_manager.save_agent_state(payload.task_id)
-                            return
-
+                async for event in agent.reply_stream(inputs):
+                    if isinstance(event, RequireUserConfirmEvent):
+                        pending_reply_id = event.reply_id
+                        pending_tool_calls = event.tool_calls
                         for frame in translator.translate(event):
-                            await queue.put(frame)
+                            await turn.broadcast(frame)
+                        break
 
-                        if isinstance(event, ToolResultEndEvent):
-                            # The translator's buffer has been popped during
-                            # `translate`. Re-serialise the todo list and emit
-                            # a snapshot when the just-finished tool was a
-                            # todo mutator.
-                            todos_now = serialize_todos(agent.state)
-                            todo_frames = todo_changed_after_tool(
-                                tool_name_after or "",
-                                todos_now,
-                            )
-                            if todo_frames is not None:
-                                for frame in todo_frames:
-                                    await queue.put(frame)
+                    # Translate the event into SSE frames. Tools that
+                    # ended during this iteration get their buffer
+                    # popped by the translator; we capture the tool name
+                    # before/after to decide whether to send a fresh
+                    # `task_todos_changed` snapshot.
+                    tool_name_after: str | None = None
+                    if isinstance(event, ToolResultEndEvent):
+                        # Peek at the buffer the translator is about to pop.
+                        buf = translator._buffers.get(event.tool_call_id)
+                        tool_name_after = buf.tool_name if buf else None
 
-                    if pending_reply_id is None:
-                        # The stream ended without a ReplyEndEvent or a confirm
-                        # request — close the turn defensively rather than
-                        # hanging the connection open.
+                    if isinstance(event, ReplyEndEvent):
+                        # 1. 确保任务重命名在完成前到达（若尚未完成则最多等 2 秒）
                         if title_worker_task is not None and not title_worker_task.done():
                             try:
                                 await asyncio.wait_for(
@@ -339,56 +297,115 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                                 )
                             except Exception:
                                 pass
+
+                        # 2. 推送可能生成的新工件
+                        for frame in _new_artifact_frames(
+                            payload.task_id,
+                            turn_started_at,
+                        ):
+                            await turn.broadcast(frame)
+
+                        # 3. 推送最终的 todo 状态快照
+                        await turn.broadcast(
+                            final_todos_changed_frame(
+                                serialize_todos(agent.state),
+                            )
+                        )
+
+                        # 4. 推送 done 结束帧
+                        for frame in translator.translate(event):
+                            await turn.broadcast(frame)
+
                         await task_manager.save_agent_state(payload.task_id)
-                        await queue.put(sse_frame("done", {"task_status": "completed"}))
+                        task_manager.update_task(payload.task_id, status="completed")
                         return
 
-                    future = task_manager.wait_for_confirm(pending_reply_id)
-                    action = await future
-                    inputs = UserConfirmResultEvent(
-                        reply_id=pending_reply_id,
-                        confirm_results=[
-                            ConfirmResult(confirmed=action == "allow", tool_call=tc)
-                            for tc in pending_tool_calls
-                        ],
-                    )
-            except Exception as exc:  # noqa: BLE001 - surfaced to the client
-                await queue.put(sse_frame("text_delta", {"text": f"\n\n[后端错误: {exc}]"}))
-                await queue.put(sse_frame("done", {"task_status": "failed"}))
-            finally:
-                await queue.put(sentinel)
+                    for frame in translator.translate(event):
+                        await turn.broadcast(frame)
 
-        worker_tasks = [
-            asyncio.create_task(_agent_worker()),
-        ]
-        if title_worker_task is not None:
-            worker_tasks.append(title_worker_task)
+                    if isinstance(event, ToolResultEndEvent):
+                        # The translator's buffer has been popped during
+                        # `translate`. Re-serialise the todo list and emit
+                        # a snapshot when the just-finished tool was a
+                        # todo mutator.
+                        todos_now = serialize_todos(agent.state)
+                        todo_frames = todo_changed_after_tool(
+                            tool_name_after or "",
+                            todos_now,
+                        )
+                        if todo_frames is not None:
+                            for frame in todo_frames:
+                                await turn.broadcast(frame)
 
-        try:
-            while True:
-                item = await queue.get()
-                if item is sentinel:
-                    break
-                yield item
+                if pending_reply_id is None:
+                    # The stream ended without a ReplyEndEvent or a confirm
+                    # request — close the turn defensively rather than
+                    # hanging the connection open.
+                    if title_worker_task is not None and not title_worker_task.done():
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.shield(title_worker_task),
+                                timeout=2.0,
+                            )
+                        except Exception:
+                            pass
+                    await task_manager.save_agent_state(payload.task_id)
+                    await turn.broadcast(sse_frame("done", {"task_status": "completed"}))
+                    task_manager.update_task(payload.task_id, status="completed")
+                    return
+
+                future = task_manager.wait_for_confirm(pending_reply_id)
+                action = await future
+                inputs = UserConfirmResultEvent(
+                    reply_id=pending_reply_id,
+                    confirm_results=[
+                        ConfirmResult(confirmed=action == "allow", tool_call=tc)
+                        for tc in pending_tool_calls
+                    ],
+                )
+        except asyncio.CancelledError:
+            task_manager.update_task(payload.task_id, status="completed")
+            await turn.broadcast(sse_frame("done", {"task_status": "aborted"}))
+            raise
+        except Exception as exc:  # noqa: BLE001 - surfaced to the client
+            task_manager.update_task(payload.task_id, status="failed")
+            await turn.broadcast(sse_frame("text_delta", {"text": f"\n\n[后端错误: {exc}]"}))
+            await turn.broadcast(sse_frame("done", {"task_status": "failed"}))
         finally:
-            for t in worker_tasks:
-                if not t.done():
-                    t.cancel()
-
-    async def event_stream():
-        try:
-            async for item in _generate():
-                yield item
-        finally:
+            await turn.finish()
             if lock.locked():
                 lock.release()
+            active_turn_manager.remove(payload.task_id)
 
-    try:
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
-    except Exception:
-        if lock.locked():
-            lock.release()
-        raise
+    turn.worker_task = asyncio.create_task(_agent_worker())
+
+    return StreamingResponse(turn.subscribe(), media_type="text/event-stream")
+
+
+@app.get("/api/tasks/{task_id}/events")
+async def stream_task_events(task_id: str) -> StreamingResponse:
+    task = task_manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+
+    turn = active_turn_manager.get(task_id)
+    if turn is not None:
+        return StreamingResponse(turn.subscribe(), media_type="text/event-stream")
+
+    async def idle_stream():
+        yield sse_frame("done", {"task_status": task.status})
+
+    return StreamingResponse(idle_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/tasks/{task_id}/abort")
+async def abort_task(task_id: str) -> dict:
+    task = task_manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+
+    aborted = await active_turn_manager.abort(task_id)
+    return {"ok": True, "aborted": aborted}
 
 
 @app.post("/api/tasks/{task_id}/confirm")

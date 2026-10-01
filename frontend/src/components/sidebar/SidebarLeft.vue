@@ -93,9 +93,13 @@ import { McLayoutAside } from '@matechat/core'
 import WorkspaceTree from './WorkspaceTree.vue'
 import { useWorkspaceStore } from '@/store/workspaces'
 import { useSettingsStore } from '@/store/settings'
+import { useSessionStore } from '@/store/session'
+import { useTodosStore } from '@/store/todos'
 
 const store = useWorkspaceStore()
 const settings = useSettingsStore()
+const session = useSessionStore()
+const todos = useTodosStore()
 
 const query = computed({
   get: () => store.searchQuery,
@@ -163,6 +167,10 @@ async function confirmCreate(): Promise<void> {
   const title = draftTitle.value.trim() || '新任务'
   const task = await store.createTaskRemote(workspaceId, title)
   store.selectTask(task.id)
+  session.switchToTask(task.id)
+  todos.switchToTask(task.id)
+  session.reset(task.id)
+  todos.clear(task.id)
   closePanel()
 }
 </script>

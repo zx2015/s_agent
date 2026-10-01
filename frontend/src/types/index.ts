@@ -25,6 +25,12 @@ export interface SystemReminder {
   content: string
 }
 
+export type ChatContentBlock =
+  | { type: 'thinking'; content: string }
+  | { type: 'text'; content: string }
+  | { type: 'tool_call'; call: ToolCallRecord }
+  | { type: 'system_reminder'; blockId: string; content: string }
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -36,6 +42,8 @@ export interface ChatMessage {
   toolCalls: ToolCallRecord[]
   /** System reminders (e.g. environment block, time, memory hints) */
   systemReminders?: SystemReminder[]
+  /** Chronologically ordered interleaved content blocks (thinking, text, tool_call). */
+  blocks?: ChatContentBlock[]
   /** Set while the turn is still streaming. */
   streaming: boolean
 }

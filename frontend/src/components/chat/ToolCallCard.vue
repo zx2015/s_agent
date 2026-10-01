@@ -2,7 +2,7 @@
   <div class="tool-call" :class="`status-${call.status}`">
     <header class="tool-header">
       <span class="tool-icon">{{ statusIcon }}</span>
-      <span class="tool-name">{{ call.tool }}</span>
+      <span class="tool-name">{{ toolDisplayName }}</span>
       <span class="tool-status">{{ statusLabel }}</span>
     </header>
     <pre class="tool-args">{{ argsPreview }}</pre>
@@ -15,6 +15,14 @@ import { computed } from 'vue'
 import type { ToolCallRecord } from '@/types'
 
 const props = defineProps<{ call: ToolCallRecord }>()
+
+const toolDisplayName = computed(() => {
+  if (props.call.tool === 'delegate_task') {
+    const role = props.call.args.role ? ` (${props.call.args.role})` : ''
+    return `子智能体委派${role}`
+  }
+  return props.call.tool
+})
 
 const statusIcon = computed(() => {
   switch (props.call.status) {

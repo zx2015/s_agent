@@ -124,6 +124,50 @@ export class ApiClient {
       }
     }
   }
+
+  /**
+   * GET an SSE stream and consume the response as parsed frames.
+   *
+   * Used for reconnecting to an ongoing background task turn.
+   *
+   * @param path - The endpoint path.
+   * @param signal - Optional AbortSignal.
+   * @returns An async generator yielding parsed frames in arrival order.
+   */
+  async *streamGet(
+    path: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<{ event: string; data: Record<string, unknown> }> {
+    const response = await fetch(this.url(path), {
+      method: 'GET',
+      headers: {
+        Accept: 'text/event-stream',
+      },
+      signal,
+    })
+
+    if (!response.ok || !response.body) {
+      throw new ApiError(await response.text(), response.status)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const { frames, rest } = splitSseBuffer(buffer)
+      buffer = rest
+
+      for (const frame of frames) {
+        const parsed = parseSseFrame(frame)
+        if (parsed) yield parsed
+      }
+    }
+  }
 }
 
 export const apiClient = new ApiClient('')

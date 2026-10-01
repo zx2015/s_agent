@@ -122,6 +122,20 @@ def test_create_delegate_task_tool_schema(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_create_delegate_task_tool_invocation(tmp_path: Path):
+    tool = create_delegate_task_tool(workspace_dir=tmp_path)
+    with patch("server.agent.subagents.runner.DynamicSubAgentRunner.run", new=AsyncMock(return_value="子任务执行成功摘要")):
+        res = await tool(
+            role="测试分析师",
+            instruction="分析业务",
+            allowed_tools=["file_io"],
+            timeout_seconds=30,
+        )
+        # FunctionTool invocation returns a ToolResponse or string
+        assert "子任务执行成功摘要" in str(res)
+
+
+@pytest.mark.asyncio
 async def test_dynamic_subagent_runner_execution(tmp_path: Path):
     runner = DynamicSubAgentRunner(
         role="估值精算师",
@@ -182,6 +196,30 @@ async def test_dynamic_subagent_runner_timeout_handling(tmp_path: Path):
         result = await runner.run()
         assert "执行超时告警" in result
         assert "子任务在执行 1 秒后超出时限" in result
+
+
+@pytest.mark.asyncio
+async def test_dynamic_subagent_runner_interruption_fallback_handling(tmp_path: Path):
+    runner = DynamicSubAgentRunner(
+        role="被中断调研员",
+        instruction="执行调研",
+        allowed_tools=["file_io"],
+        base_template="general",
+        workspace_dir=tmp_path,
+        timeout_seconds=60,
+    )
+
+    async def interrupt_reply(*args, **kwargs):
+        return Msg(
+            name="sub",
+            role="assistant",
+            content=[{"type": "text", "text": "I notice the interruption. How can I help you?"}],
+        )
+
+    with patch("server.agent.subagents.runner.Agent.reply", new=interrupt_reply):
+        result = await runner.run()
+        assert "执行超时/中断告警" in result
+        assert "维基落盘检查" in result
 
 
 @pytest.mark.asyncio

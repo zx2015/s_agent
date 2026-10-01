@@ -161,6 +161,14 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     if (task) task.hasArtifacts = true
   }
 
+  function updateTaskStatus(taskId: string, status: Task['status']): void {
+    const task = findTask(taskId)
+    if (task) {
+      task.status = status
+      task.updatedAt = new Date().toISOString()
+    }
+  }
+
   /**
    * Load the workspace/task tree from the backend.
    *
@@ -244,6 +252,7 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     resetTaskContextRemote,
     createTask,
     markArtifacts,
+    updateTaskStatus,
     fetchWorkspaces,
     createTaskRemote,
     deleteTaskRemote,

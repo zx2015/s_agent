@@ -112,6 +112,42 @@ describe('session store', () => {
     expect(store.messages[0].toolCalls[0].summary).toBe('2')
   })
 
+  it('accumulates interleaved content blocks chronologically', () => {
+    const store = useSessionStore()
+    store.beginAssistantTurn()
+    store.applyFrame(frame('thinking_delta', { text: '思考步骤 1' }))
+    store.applyFrame(frame('text_delta', { text: '先输出一句话' }))
+    store.applyFrame(
+      frame('tool_call_start', {
+        call_id: 'c1',
+        tool: 'delegate_task',
+        args: { role: '调研员' },
+      }),
+    )
+    store.applyFrame(
+      frame('tool_call_end', {
+        call_id: 'c1',
+        status: 'success',
+        result_summary: '调研完成',
+      }),
+    )
+    store.applyFrame(frame('text_delta', { text: '调研结果分析完毕' }))
+
+    const msg = store.messages[0]
+    expect(msg.blocks).toBeDefined()
+    expect(msg.blocks).toHaveLength(4)
+    expect(msg.blocks![0]).toEqual({ type: 'thinking', content: '思考步骤 1' })
+    expect(msg.blocks![1]).toEqual({ type: 'text', content: '先输出一句话' })
+    expect(msg.blocks![2].type).toBe('tool_call')
+    if (msg.blocks![2].type === 'tool_call') {
+      expect(msg.blocks![2].call.callId).toBe('c1')
+      expect(msg.blocks![2].call.tool).toBe('delegate_task')
+      expect(msg.blocks![2].call.status).toBe('success')
+      expect(msg.blocks![2].call.summary).toBe('调研完成')
+    }
+    expect(msg.blocks![3]).toEqual({ type: 'text', content: '调研结果分析完毕' })
+  })
+
   it('records system reminders on the assistant message', () => {
     const store = useSessionStore()
     store.beginAssistantTurn()

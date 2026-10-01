@@ -1,17 +1,12 @@
 /**
  * Wiring between the chat input and the agent stream.
  *
- * Two modes share one code path:
- *
- * * **Live** — `POST /api/chat` returns an SSE stream that is consumed
- *   frame by frame.
- * * **Mock** — when `VITE_USE_MOCK` is set, the local simulator stands in.
- *   This is what lets the workbench be built and demoed without a backend.
- *
- * Switching between them is a build-time flag rather than a code change,
- * so integration testing is a one-line diff.
+ * Supports multi-session concurrent execution:
+ * - Each running task has its own AbortController and stream consumer loop.
+ * - Switching away from a task keeps the task executing in the background.
+ * - Switching back to a task or refreshing connects seamlessly via /events.
+ * - Stopping a task triggers backend abort and cancels local stream.
  */
-import { ref } from 'vue'
 import { apiClient, ApiError } from '@/api/client'
 import { parseSseFrame } from '@/api/events'
 import { mockTurn } from '@/mock/sse-server'
@@ -19,30 +14,20 @@ import { useSessionStore } from '@/store/session'
 import { useSettingsStore } from '@/store/settings'
 import { useTodosStore } from '@/store/todos'
 import { useWorkspaceStore } from '@/store/workspaces'
+import type { Task } from '@/types'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
-const sharedAbortController = ref<AbortController | null>(null)
+const activeControllers = new Map<string, AbortController>()
 
 export function useChat() {
   const session = useSessionStore()
   const workspace = useWorkspaceStore()
   const todos = useTodosStore()
   const settings = useSettingsStore()
-  const abortController = sharedAbortController
 
   /**
    * Make sure a task is selected before running a turn, creating one on
    * the fly if the user never picked one from the sidebar.
-   *
-   * Without this, sending a message with no active task silently did
-   * nothing beyond echoing the user's own bubble — `send()` used to
-   * return right after the `if (!taskId) return` check, before ever
-   * calling the backend. Auto-creating a task here means "just type and
-   * send" works the same way it would in a chat product that doesn't
-   * force the user to create a project first.
-   *
-   * @returns The task id to run against, or `null` if creation failed
-   *   (e.g. the backend is unreachable).
    */
   async function ensureActiveTask(): Promise<string | null> {
     if (workspace.activeTaskId) return workspace.activeTaskId
@@ -55,35 +40,36 @@ export function useChat() {
       }
       const task = workspace.createTask(workspaceId, '新任务')
       workspace.selectTask(task.id)
+      session.switchToTask(task.id)
+      todos.switchToTask(task.id)
       return task.id
     }
 
     try {
       const task = await workspace.createTaskRemote(workspaceId, '新任务')
       workspace.selectTask(task.id)
+      session.switchToTask(task.id)
+      todos.switchToTask(task.id)
       return task.id
     } catch {
       return null
     }
   }
 
+  function isTaskActive(taskId: string): boolean {
+    return activeControllers.has(taskId)
+  }
+
   /**
    * Send one message and stream the reply into the session store.
-   *
-   * @param message - The user's message.
+   * Runs independently per task so switching away does not abort.
    */
   async function send(message: string): Promise<void> {
-    if (session.isStreaming) return
-
-    // Record the user's turn before resolving a task, so the transcript
-    // shows what was typed even if task creation ends up failing.
-    session.addUserMessage(message)
-
     const taskId = await ensureActiveTask()
 
-    session.beginAssistantTurn()
-
     if (!taskId) {
+      session.addUserMessage(message)
+      session.beginAssistantTurn()
       session.applyFrame({
         event: 'text_delta',
         data: { text: '无法创建任务，请确认后端服务是否已启动。' },
@@ -95,21 +81,28 @@ export function useChat() {
       return
     }
 
+    if (session.isTaskStreaming(taskId)) return
+
+    session.addUserMessage(message, taskId)
+    session.beginAssistantTurn(taskId)
+    workspace.updateTaskStatus(taskId, 'running')
+
     if (USE_MOCK) {
       const noWait = () => Promise.resolve()
       for await (const frame of mockTurn(message, noWait)) {
         const parsed = parseSseFrame(frame)
         if (parsed?.event === 'task_todos_changed') {
-          todos.applyFrame(parsed.data as never)
+          todos.applyFrame(parsed.data as never, taskId)
         } else if (parsed) {
-          session.applyFrame(parsed)
+          session.applyFrame(parsed, taskId)
         }
       }
+      workspace.updateTaskStatus(taskId, 'completed')
       return
     }
 
     const controller = new AbortController()
-    abortController.value = controller
+    activeControllers.set(taskId, controller)
 
     try {
       for await (const parsed of apiClient.stream(
@@ -123,34 +116,33 @@ export function useChat() {
         },
         controller.signal,
       )) {
-        // Not a chat-transcript frame — routed straight to the workspace
-        // store instead of `session.applyFrame` (which is turn-guarded
-        // for message content, see `store/session.ts`). `renameTask` is
-        // local-only by design (see its docstring): the backend has
-        // already persisted the new title by the time this frame
-        // arrives, so no extra API round-trip is needed here.
         if (parsed.event === 'task_renamed') {
           workspace.renameTask(taskId, String(parsed.data.title))
           continue
         }
         if (parsed.event === 'task_todos_changed') {
-          todos.applyFrame(parsed.data as never)
+          todos.applyFrame(parsed.data as never, taskId)
           continue
         }
-        session.applyFrame(parsed as never)
+        if (parsed.event === 'artifact_created') {
+          workspace.markArtifacts(taskId)
+        }
+        if (parsed.event === 'done') {
+          const status = String(parsed.data.task_status || 'completed') as Task['status']
+          workspace.updateTaskStatus(taskId, status)
+        }
+        session.applyFrame(parsed as never, taskId)
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
         session.applyFrame({
           event: 'done',
           data: { task_status: 'aborted' },
-        } as never)
+        } as never, taskId)
+        workspace.updateTaskStatus(taskId, 'completed')
         return
       }
 
-      // The stream can fail mid-flight (backend restart, network drop, or 409 conflict).
-      // Surface it in the transcript rather than leaving a spinner that
-      // never resolves.
       const errorText =
         err instanceof ApiError && err.status === 409
           ? '\n\n[任务正在处理上一条消息，请稍后再试]'
@@ -158,40 +150,99 @@ export function useChat() {
       session.applyFrame({
         event: 'text_delta',
         data: { text: errorText },
-      } as never)
+      } as never, taskId)
       session.applyFrame({
         event: 'done',
         data: { task_status: 'failed' },
-      } as never)
+      } as never, taskId)
+      workspace.updateTaskStatus(taskId, 'failed')
     } finally {
-      abortController.value = null
+      activeControllers.delete(taskId)
     }
   }
 
-  /** Abort the in-flight turn. */
-  function stop(): void {
-    abortController.value?.abort()
+  /**
+   * Reconnect to an in-flight background task to resume stream updates.
+   */
+  async function reconnect(taskId: string): Promise<void> {
+    if (activeControllers.has(taskId) || USE_MOCK) return
+
+    const controller = new AbortController()
+    activeControllers.set(taskId, controller)
+
+    if (!session.isTaskStreaming(taskId)) {
+      session.beginAssistantTurn(taskId)
+    }
+
+    try {
+      for await (const parsed of apiClient.streamGet(
+        `/api/tasks/${taskId}/events`,
+        controller.signal,
+      )) {
+        if (parsed.event === 'task_renamed') {
+          workspace.renameTask(taskId, String(parsed.data.title))
+          continue
+        }
+        if (parsed.event === 'task_todos_changed') {
+          todos.applyFrame(parsed.data as never, taskId)
+          continue
+        }
+        if (parsed.event === 'artifact_created') {
+          workspace.markArtifacts(taskId)
+        }
+        if (parsed.event === 'done') {
+          const status = String(parsed.data.task_status || 'completed') as Task['status']
+          workspace.updateTaskStatus(taskId, status)
+        }
+        session.applyFrame(parsed as never, taskId)
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        session.applyFrame({
+          event: 'done',
+          data: { task_status: 'aborted' },
+        } as never, taskId)
+        workspace.updateTaskStatus(taskId, 'completed')
+        return
+      }
+    } finally {
+      activeControllers.delete(taskId)
+    }
+  }
+
+  /** Abort the in-flight turn for the current or specified task. */
+  async function stop(targetTaskId?: string): Promise<void> {
+    const taskId = targetTaskId || workspace.activeTaskId || '__default__'
+
+    const controller = activeControllers.get(taskId)
+    controller?.abort()
+    activeControllers.delete(taskId)
+
+    if (!USE_MOCK && taskId !== '__default__') {
+      try {
+        await apiClient.post(`/api/tasks/${taskId}/abort`, {})
+      } catch {
+        // Backend abort is best effort
+      }
+    }
+
     session.applyFrame({
       event: 'done',
       data: { task_status: 'aborted' },
-    } as never)
+    } as never, taskId)
+    workspace.updateTaskStatus(taskId, 'completed')
   }
 
   /**
    * Resolve a pending HITL confirmation.
-   *
-   * Posting to `/api/tasks/{id}/confirm` resolves the `asyncio.Future`
-   * the backend's still-open `/api/chat` SSE connection is awaiting (see
-   * `server/service/task_manager.py`), so the same stream resumes and
-   * keeps yielding frames after this call returns. The card is cleared
-   * locally either way — a stale confirm request (network error, task
-   * already moved on) should not leave the UI stuck.
    */
-  async function confirmToolCall(action: 'allow' | 'deny'): Promise<void> {
+  async function confirmToolCall(action: 'allow' | 'deny', targetTaskId?: string): Promise<void> {
+    const taskId = targetTaskId || workspace.activeTaskId
+    if (!taskId) return
+
     const pending = session.pendingConfirm
-    const taskId = workspace.activeTaskId
-    session.resolveConfirm(action)
-    if (!pending || !taskId || USE_MOCK) return
+    session.resolveConfirm(action, taskId)
+    if (!pending || USE_MOCK) return
 
     try {
       await apiClient.post(`/api/tasks/${taskId}/confirm`, {
@@ -199,10 +250,9 @@ export function useChat() {
         action,
       })
     } catch {
-      // Nothing more to do — the card is already cleared, and the
-      // backend's own turn will time out/error on its side.
+      // Best-effort
     }
   }
 
-  return { send, stop, confirmToolCall }
+  return { send, stop, reconnect, isTaskActive, confirmToolCall }
 }

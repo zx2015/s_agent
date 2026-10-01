@@ -3,23 +3,35 @@
     class="assistant-bubble"
     align="left"
     variant="none"
-    :loading="message.streaming && !message.text && message.toolCalls.length === 0"
+    :loading="message.streaming && !message.text && message.toolCalls.length === 0 && (!message.blocks || message.blocks.length === 0)"
   >
-    <ThinkingBlock :text="message.thinking" />
-    <ToolCallCard
-      v-for="call in message.toolCalls"
-      :key="call.callId"
-      :call="call"
-    />
-    <div v-if="message.text" class="assistant-text" data-test="assistant-text">
-      <McMarkdownCard :content="message.text" />
-    </div>
-    <span v-if="message.streaming && message.text" class="cursor" />
+    <!-- Chronologically ordered blocks (thinking, tool_call, text) -->
+    <template v-if="message.blocks && message.blocks.length > 0">
+      <template v-for="(block, index) in message.blocks" :key="index">
+        <ThinkingBlock v-if="block.type === 'thinking'" :text="block.content" />
+        <ToolCallCard v-else-if="block.type === 'tool_call'" :call="block.call" />
+        <div v-else-if="block.type === 'text' && block.content" class="assistant-text" data-test="assistant-text">
+          <McMarkdownCard :content="block.content" />
+        </div>
+      </template>
+    </template>
 
-    <!-- Copy is the only action with real, self-contained behavior
-         (McCopyIcon writes `text` to the clipboard itself) — shown once
-         the answer has actually finished, so there's nothing to copy
-         mid-stream. -->
+    <!-- Fallback for historical messages without blocks -->
+    <template v-else>
+      <ThinkingBlock :text="message.thinking" />
+      <ToolCallCard
+        v-for="call in message.toolCalls"
+        :key="call.callId"
+        :call="call"
+      />
+      <div v-if="message.text" class="assistant-text" data-test="assistant-text">
+        <McMarkdownCard :content="message.text" />
+      </div>
+    </template>
+
+    <span v-if="message.streaming && (message.text || (message.blocks && message.blocks.length > 0))" class="cursor" />
+
+    <!-- Copy is shown once the answer has actually finished -->
     <McToolbar
       v-if="!message.streaming && message.text"
       class="assistant-toolbar"

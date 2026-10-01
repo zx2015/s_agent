@@ -72,7 +72,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { Pane, Splitpanes } from 'splitpanes'
-import type { SplitpanesResizePayload } from 'splitpanes'
 import SidebarLeft from '@/components/sidebar/SidebarLeft.vue'
 import SidebarMiddle from '@/components/chat/SidebarMiddle.vue'
 import SidebarRight from '@/components/artifacts/SidebarRight.vue'
@@ -127,8 +126,8 @@ watch(
  *
  * @param payload - The resize event carrying the current pane sizes.
  */
-function onResize(payload: SplitpanesResizePayload | Array<{ size: number }>): void {
-  const panes = Array.isArray(payload) ? payload : (payload.panes || [])
+function onResize(payload: any): void {
+  const panes = Array.isArray(payload) ? payload : (payload?.panes || [])
   const sizes = panes.map((pane: any) => pane.size)
   if (sizes.length === 0) return
 

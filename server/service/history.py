@@ -17,6 +17,7 @@ from agentscope.message import (
     ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
+    ToolResultState,
 )
 from agentscope.state import AgentState
 
@@ -57,6 +58,31 @@ def agent_state_to_chat_messages(state: AgentState | None) -> list[dict[str, Any
     if state is None or not state.context:
         return []
 
+    # Pre-collect all tool results across the context so that tool calls
+    # followed by tool results in subsequent messages can be resolved.
+    results_by_id: dict[str, tuple[str, str]] = {}
+    for msg in state.context:
+        if not isinstance(msg, Msg):
+            continue
+        for block in getattr(msg, "content", []):
+            if isinstance(block, ToolResultBlock):
+                call_id = getattr(block, "id", "")
+                output = getattr(block, "output", "")
+                b_state = getattr(block, "state", None)
+                status = (
+                    "error"
+                    if b_state in (
+                        ToolResultState.ERROR,
+                        ToolResultState.DENIED,
+                        ToolResultState.INTERRUPTED,
+                        "error",
+                        "failed",
+                        "interrupted",
+                    )
+                    else "success"
+                )
+                results_by_id[call_id] = (_serialize_tool_output(output), status)
+
     messages: list[dict[str, Any]] = []
 
     for msg in state.context:
@@ -72,11 +98,7 @@ def agent_state_to_chat_messages(state: AgentState | None) -> list[dict[str, Any
         text_parts: list[str] = []
         thinking_parts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
-
-        # ToolResult blocks in AgentScope sometimes trail their matching
-        # ToolCallBlock in the same message or in a subsequent message.
-        # Track by call id to patch summaries into the call records.
-        results_by_id: dict[str, str] = {}
+        blocks: list[dict[str, Any]] = []
 
         for block in getattr(msg, "content", []):
             if isinstance(block, TextBlock):
@@ -86,28 +108,37 @@ def agent_state_to_chat_messages(state: AgentState | None) -> list[dict[str, Any
                 if "<system-reminder>" in txt:
                     continue
                 text_parts.append(txt)
-            elif isinstance(block, ThinkingBlock):
-                thinking_parts.append(getattr(block, "thinking", ""))
-            elif isinstance(block, ToolCallBlock):
-                tool_calls.append(
-                    {
-                        "callId": getattr(block, "id", ""),
-                        "tool": getattr(block, "name", ""),
-                        "args": _safe_json_loads(getattr(block, "input", "")),
-                        "status": "success",
-                        "summary": "",
-                    }
-                )
-            elif isinstance(block, ToolResultBlock):
-                call_id = getattr(block, "id", "")
-                output = getattr(block, "output", "")
-                results_by_id[call_id] = _serialize_tool_output(output)
+                if blocks and blocks[-1]["type"] == "text":
+                    blocks[-1]["content"] += ("\n" + txt)
+                else:
+                    blocks.append({"type": "text", "content": txt})
 
-        # Patch summaries into matching tool calls
-        for call in tool_calls:
-            cid = call["callId"]
-            if cid in results_by_id:
-                call["summary"] = results_by_id[cid]
+            elif isinstance(block, ThinkingBlock):
+                th = getattr(block, "thinking", "")
+                thinking_parts.append(th)
+                if blocks and blocks[-1]["type"] == "thinking":
+                    blocks[-1]["content"] += ("\n" + th)
+                else:
+                    blocks.append({"type": "thinking", "content": th})
+
+            elif isinstance(block, ToolCallBlock):
+                call_id = getattr(block, "id", "")
+                res_tuple = results_by_id.get(call_id)
+                summary = res_tuple[0] if res_tuple else ""
+                status = res_tuple[1] if res_tuple else "success"
+                call_dict = {
+                    "callId": call_id,
+                    "tool": getattr(block, "name", ""),
+                    "args": _safe_json_loads(getattr(block, "input", "")),
+                    "status": status,
+                    "summary": summary,
+                }
+                tool_calls.append(call_dict)
+                blocks.append({"type": "tool_call", "call": call_dict})
+
+            elif isinstance(block, ToolResultBlock):
+                # Captured via results_by_id and attached to ToolCallBlock
+                pass
 
         # A message that ended up with no displayable content (e.g. pure
         # system-reminder user message) should be dropped.
@@ -121,6 +152,7 @@ def agent_state_to_chat_messages(state: AgentState | None) -> list[dict[str, Any
                 "text": "\n".join(text_parts),
                 "thinking": "\n".join(thinking_parts),
                 "toolCalls": tool_calls,
+                "blocks": blocks,
                 "streaming": False,
             }
         )

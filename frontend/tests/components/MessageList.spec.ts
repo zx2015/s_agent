@@ -81,4 +81,22 @@ describe('MessageList', () => {
     expect(wrapper.text()).toContain('思考过程')
     expect(wrapper.find('[data-test="assistant-text"]').text()).toBe('答案')
   })
+
+  it('renders interleaved blocks in chronological order', async () => {
+    const { wrapper, store } = mountList()
+    store.beginAssistantTurn()
+    store.applyFrame({ event: 'text_delta', data: { text: '前置说明' } } as ParsedFrame)
+    store.applyFrame({
+      event: 'tool_call_start',
+      data: { call_id: 'c1', tool: 'delegate_task', args: { role: '分析师' } },
+    } as ParsedFrame)
+    store.applyFrame({ event: 'text_delta', data: { text: '后置总结' } } as ParsedFrame)
+    await wrapper.vm.$nextTick()
+
+    const textElements = wrapper.findAll('[data-test="assistant-text"]')
+    expect(textElements.length).toBe(2)
+    expect(textElements[0].text()).toContain('前置说明')
+    expect(textElements[1].text()).toContain('后置总结')
+    expect(wrapper.text()).toContain('子智能体委派 (分析师)')
+  })
 })

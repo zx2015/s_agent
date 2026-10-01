@@ -91,23 +91,48 @@ class DynamicSubAgentRunner:
             f"timeout={effective_timeout}s, max_iters={effective_max_iters})"
         )
 
+        start_time = asyncio.get_running_loop().time()
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._execute_agent(effective_max_iters),
                 timeout=float(effective_timeout),
             )
+            elapsed = asyncio.get_running_loop().time() - start_time
+
+            # 兜底保护：拦截并转换 AgentScope 内部未抛出的默认 interruption 提示语
+            if result.startswith("I notice the interruption"):
+                logger.warning(
+                    f"动态子智能体 [{self.role}] 耗时 {elapsed:.1f}s 返回了 AgentScope 中断提示语，判定为执行超时或中断"
+                )
+                return (
+                    f"### 【{self.role}·执行超时/中断告警】\n"
+                    f"- **状态**：子任务执行耗时 {elapsed:.1f} 秒，未能正常收敛汇总。\n"
+                    f"- **维基落盘检查**：子智能体可能已将部分底稿写入本地维基（data/wiki/），请主 Agent 优先使用 `wiki_query` 检查是否已有最新底稿；\n"
+                    f"- **排查建议**：如确需更多数据，请将问题拆解为更小的垂直粒度后再委派。"
+                )
+
+            logger.info(
+                f"动态子智能体 [{self.role}] 执行成功 (耗时 {elapsed:.1f}s, 产出 {len(result)} 字)"
+            )
+            return result
         except asyncio.TimeoutError:
+            elapsed = asyncio.get_running_loop().time() - start_time
             logger.warning(
-                f"动态子智能体 [{self.role}] 执行超时 ({effective_timeout}s)"
+                f"动态子智能体 [{self.role}] 触发硬超时限制 ({effective_timeout}s)，已耗时 {elapsed:.1f}s"
             )
             return (
                 f"### 【{self.role}·执行超时告警】\n"
                 f"- **状态**：子任务在执行 {effective_timeout} 秒后超出时限未完全结束。\n"
+                f"- **维基落盘检查**：子智能体可能已在超时前完成了部分底稿落盘，请主 Agent 优先使用 `wiki_query` 检查本地维基；\n"
                 f"- **排查建议**：请主 Agent 检查当前子任务是否过于宽泛，建议拆解为更小的具体问题，"
                 f"或在 delegate_task 中增大 timeout_seconds 重新调用。"
             )
         except Exception as e:
-            logger.error(f"动态子智能体 [{self.role}] 执行异常: {e}", exc_info=True)
+            elapsed = asyncio.get_running_loop().time() - start_time
+            logger.error(
+                f"动态子智能体 [{self.role}] 执行异常 (耗时 {elapsed:.1f}s): {e}",
+                exc_info=True,
+            )
             return (
                 f"### 【{self.role}·执行异常】\n"
                 f"- **错误详情**：{str(e)}\n"
@@ -127,6 +152,10 @@ class DynamicSubAgentRunner:
         toolkit = Toolkit()
         for t in resolved_tools:
             await toolkit.add_tool(t)
+
+        logger.info(
+            f"动态子智能体 [{self.role}] 沙箱就绪: 挂载 {len(resolved_tools)} 个工具 {[t.name for t in resolved_tools]}"
+        )
 
         # 2. 组装模型与凭据
         credential = OpenAICredential(
@@ -170,6 +199,7 @@ class DynamicSubAgentRunner:
         )
         react_config = ReActConfig(
             max_iters=effective_max_iters,
+            interruption_raise_cancelled_error=True,
         )
 
         agent = Agent(

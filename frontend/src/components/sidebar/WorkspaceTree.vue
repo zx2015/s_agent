@@ -77,11 +77,13 @@ import { ListVariant } from '@matechat/core/List'
 import { useWorkspaceStore } from '@/store/workspaces'
 import { useSessionStore } from '@/store/session'
 import { useTodosStore } from '@/store/todos'
+import { useChat } from '@/composables/useChat'
 import type { Task } from '@/types'
 
 const store = useWorkspaceStore()
 const session = useSessionStore()
 const todos = useTodosStore()
+const chat = useChat()
 const collapsed = ref<Set<string>>(new Set())
 
 /** McList's ListItemData, extended with the task fields the `#item` slot needs. */
@@ -117,61 +119,49 @@ function toggle(workspaceId: string): void {
   collapsed.value = next
 }
 
-/**
- * Targets a task at a specific workspace — the direct answer to "how do
- * I pick which workspace a new task goes into": click "+" on that
- * workspace's own row, rather than always landing in whichever workspace
- * happens to be first (see `SidebarLeft.vue`'s top-level "+ 新建任务",
- * which still does that for a quick default). `@click.stop` keeps this
- * from also toggling the group's collapse state.
- */
 async function onSelectTask(item: { value: string | number }): Promise<void> {
   const taskId = String(item.value)
   if (store.activeTaskId === taskId) return
   store.selectTask(taskId)
-  // Hydrate both the chat history and the AgentScope task list in
-  // parallel. Doing them sequentially would double the round-trip
-  // latency for users switching tasks.
-  await Promise.all([
-    session.loadHistory(taskId),
-    todos.loadTodos(taskId),
-  ])
+  session.switchToTask(taskId)
+  todos.switchToTask(taskId)
+
+  const task = store.findTask(taskId)
+  const isRunning = task?.status === 'running'
+  const isLocalActive = chat.isTaskActive(taskId)
+
+  // Only hydrate from backend if not already cached in memory
+  if (!session.hasMessages(taskId)) {
+    await Promise.all([
+      session.loadHistory(taskId),
+      todos.loadTodos(taskId),
+    ])
+  }
+
+  // If task is running in the background and this tab hasn't connected to its stream, reconnect!
+  if (isRunning && !isLocalActive) {
+    chat.reconnect(taskId)
+  }
 }
 
-/**
- * Targets a task at a specific workspace — the direct answer to "how do
- * I pick which workspace a new task goes into": click "+" on that
- * workspace's own row, rather than always landing in whichever workspace
- * happens to be first (see `SidebarLeft.vue`'s top-level "+ 新建任务",
- * which still does that for a quick default). `@click.stop` keeps this
- * from also toggling the group's collapse state.
- */
 async function onNewTaskClick(workspaceId: string): Promise<void> {
   const task = await store.createTaskRemote(workspaceId, '新任务')
   store.selectTask(task.id)
-  session.reset()
-  // Brand-new tasks have no AgentScope todos yet; clear any stale state
-  // carried over from the previously selected task.
-  todos.clear()
+  session.switchToTask(task.id)
+  todos.switchToTask(task.id)
+  session.reset(task.id)
+  todos.clear(task.id)
 }
 
-/**
- * Delete is permanent (backend removes the task's metadata, persisted
- * conversation history, and workspace files — see
- * `TaskManager.delete_task`), so it's gated behind a confirm dialog
- * rather than firing straight from the click. `@click.stop` on the
- * button keeps this from also selecting the row via McList's own click
- * handling.
- */
 async function onDeleteClick(taskId: string, title: string): Promise<void> {
   if (!window.confirm(`确定要删除对话"${title}"吗？此操作不可撤销。`)) return
 
-  const wasActive = store.activeTaskId === taskId
-  await store.deleteTaskRemote(taskId)
-  if (wasActive) {
-    session.reset()
-    todos.clear()
+  if (chat.isTaskActive(taskId)) {
+    await chat.stop(taskId)
   }
+  await store.deleteTaskRemote(taskId)
+  session.reset(taskId)
+  todos.clear(taskId)
 }
 
 /**
@@ -343,6 +333,20 @@ async function onDeleteWorkspaceClick(
 
 .status-running .status-dot {
   background: #165dff;
+  animation: pulse-dot 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    transform: scale(0.9);
+    opacity: 0.6;
+    box-shadow: 0 0 0 0 rgba(22, 93, 255, 0.4);
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+    box-shadow: 0 0 0 4px rgba(22, 93, 255, 0);
+  }
 }
 
 .status-completed .status-dot {

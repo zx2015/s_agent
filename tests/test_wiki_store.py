@@ -110,3 +110,27 @@ def test_wiki_native_tools(test_wiki: WikiStore):
 
     index_res = wiki_get_index()
     assert "伊利股份_DCF折现测算底稿" in index_res
+
+
+def test_wiki_read_offset_limit_and_kwargs(test_wiki: WikiStore):
+    test_wiki.save_page(
+        rel_path="analyses/multi_line_doc.md",
+        title="多行测试文档",
+        content="line 1\nline 2\nline 3\nline 4\nline 5",
+        summary="多行文档",
+    )
+
+    # 1. Full read
+    assert "line 1\nline 2\nline 3\nline 4\nline 5" in wiki_read("analyses/multi_line_doc.md")
+
+    # 2. Offset and limit as string (from LLM call)
+    sliced = wiki_read("analyses/multi_line_doc.md", offset="2", limit="2", extra_unrecognized_arg="foo")
+    assert "line 2\nline 3" in sliced
+    assert "line 1" not in sliced
+    assert "line 4" not in sliced
+
+    # 3. Limit on query
+    q_all = wiki_query(keyword="测试")
+    assert q_all["count"] >= 1
+    q_limit = wiki_query(keyword="测试", limit=1, unexpected_arg=123)
+    assert len(q_limit["results"]) <= 1

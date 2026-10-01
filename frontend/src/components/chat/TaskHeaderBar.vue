@@ -33,7 +33,7 @@
         v-if="session.isStreaming"
         class="action action-danger"
         title="立即强制中断生成"
-        @click="stop"
+        @click="stop()"
       >
         ⏹ 强制中断
       </button>

@@ -202,3 +202,46 @@ def test_serialize_todos_handles_multiple_tasks_order():
     )
     todos = serialize_todos(state)
     assert [t["id"] for t in todos] == ["1", "2", "3"]
+
+
+def test_interleaved_blocks_preserve_chronological_order():
+    """Verify that thinking, text, and tool calls are preserved in their exact interleaved order."""
+    state = AgentState(
+        context=[
+            Msg(
+                name="Assistant",
+                role="assistant",
+                content=[
+                    ThinkingBlock(thinking="先分析一下任务"),
+                    TextBlock(text="我将先调用计算器"),
+                    ToolCallBlock(
+                        id="call_1",
+                        name="calculate",
+                        input=json.dumps({"expression": "10*10"}),
+                    ),
+                    ToolResultBlock(
+                        id="call_1",
+                        name="calculate",
+                        output="100",
+                    ),
+                    TextBlock(text="计算结果为 100，下面开始总结"),
+                    ThinkingBlock(thinking="最后整理输出"),
+                    TextBlock(text="# 最终报告\n计算结果为 100。"),
+                ],
+            ),
+        ]
+    )
+    messages = agent_state_to_chat_messages(state)
+    assert len(messages) == 1
+    msg = messages[0]
+    blocks = msg["blocks"]
+    assert len(blocks) == 6
+    assert blocks[0] == {"type": "thinking", "content": "先分析一下任务"}
+    assert blocks[1] == {"type": "text", "content": "我将先调用计算器"}
+    assert blocks[2]["type"] == "tool_call"
+    assert blocks[2]["call"]["callId"] == "call_1"
+    assert blocks[2]["call"]["summary"] == "100"
+    assert blocks[3] == {"type": "text", "content": "计算结果为 100，下面开始总结"}
+    assert blocks[4] == {"type": "thinking", "content": "最后整理输出"}
+    assert blocks[5] == {"type": "text", "content": "# 最终报告\n计算结果为 100。"}
+

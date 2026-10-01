@@ -15,7 +15,12 @@ from server.service.wiki_store import wiki_store
 logger = logging.getLogger(__name__)
 
 
-def wiki_query(keyword: str = "", category: str = "") -> Dict[str, Any]:
+def wiki_query(
+    keyword: str = "",
+    category: str = "",
+    limit: Optional[int | str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
     """
     检索本地投研维基（LLM Wiki）的内容索引。
     在启动深度调研或回答个股/行业问题前，调用此工具可快速查阅本地是否已有编译好的研究成果，避免重复从全网盲目搜索。
@@ -23,11 +28,18 @@ def wiki_query(keyword: str = "", category: str = "") -> Dict[str, Any]:
     参数:
         keyword: 搜索关键词（如标的名称'伊利股份'、代码'sh600887'、行业赛道'乳制品'、专题主题'现金流'）
         category: 可选限定分类，可选值: 'entities'（个股公司）, 'industries'（行业宏观）, 'analyses'（专题测算）
+        limit: 可选限制返回条数（支持数字或数字字符串）
     返回:
         包含匹配页面列表与总数的结构化数据（包含路径、标题、核心概述、标签、更新时间）。
     """
     try:
         entries = wiki_store.query_wiki(keyword=keyword, category=category)
+        if limit is not None:
+            try:
+                max_n = max(0, int(limit))
+                entries = entries[:max_n]
+            except (ValueError, TypeError):
+                pass
         return {
             "status": "success",
             "count": len(entries),
@@ -42,17 +54,45 @@ def wiki_query(keyword: str = "", category: str = "") -> Dict[str, Any]:
         }
 
 
-def wiki_read(rel_path: str) -> str:
+def wiki_read(
+    rel_path: str,
+    offset: Optional[int | str] = None,
+    limit: Optional[int | str] = None,
+    **kwargs: Any,
+) -> str:
     """
-    读取指定维基页面的 Markdown 正文。
+    读取指定维基页面的 Markdown 正文。支持可选的行范围分页（用于大文档按需阅读以节省上下文）。
 
     参数:
         rel_path: 页面相对路径，例如 'entities/sh600887.md'、'industries/dairy-industry.md' 或 'analyses/2024-h1-yili-cashflow.md'
+        offset: 可选起始行号（从 1 开始计数，默认为 1）
+        limit: 可选读取的最大行数（默认读取全文）
     返回:
         页面的完整 Markdown 文本。若不存在则返回明确错误提示。
     """
     try:
-        return wiki_store.read_page(rel_path)
+        content = wiki_store.read_page(rel_path)
+        if offset is not None or limit is not None:
+            lines = content.splitlines(keepends=True)
+            total_lines = len(lines)
+            start_idx = 0
+            if offset is not None:
+                try:
+                    start_idx = max(0, int(offset) - 1)
+                except (ValueError, TypeError):
+                    start_idx = 0
+            if limit is not None:
+                try:
+                    limit_count = max(0, int(limit))
+                    end_idx = start_idx + limit_count
+                except (ValueError, TypeError):
+                    end_idx = total_lines
+            else:
+                end_idx = total_lines
+            sliced_lines = lines[start_idx:end_idx]
+            header = f"<!-- 显示第 {start_idx + 1} 至 {min(end_idx, total_lines)} 行（共 {total_lines} 行） -->\n"
+            return header + "".join(sliced_lines)
+        return content
     except FileNotFoundError:
         return f"【错误】维基页面不存在: '{rel_path}'。请先调用 wiki_query() 查阅可用页面路径。"
     except Exception as e:
