@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agentscope.event import (
+    HintBlockEvent,
     ReplyEndEvent,
     RequireUserConfirmEvent,
     TextBlockDeltaEvent,
@@ -57,6 +58,7 @@ EVENT_NAMES: frozenset[str] = frozenset(
         "require_confirm",
         "task_renamed",
         "task_todos_changed",
+        "system_reminder",
         "done",
     }
 )
@@ -152,6 +154,26 @@ class AgentEventTranslator:
                         "command": _format_tool_call(tool_call),
                         "reason": f"{tool_call.name} 属于高危操作，需要人工确认",
                         "action": "allow",
+                    },
+                ),
+            ]
+
+        if isinstance(event, HintBlockEvent):
+            if isinstance(event.hint, str):
+                content_text = event.hint
+            elif isinstance(event.hint, list):
+                content_text = "".join(
+                    block.text for block in event.hint if hasattr(block, "text")
+                )
+            else:
+                content_text = str(event.hint)
+            return [
+                sse_frame(
+                    "system_reminder",
+                    {
+                        "block_id": event.block_id,
+                        "source": event.source or "system",
+                        "content": content_text,
                     },
                 ),
             ]

@@ -32,6 +32,7 @@ state is always internally consistent; the cost is that a crash during
 a genuinely in-flight confirmation loses just that one unfinished turn,
 never a corrupted one.
 """
+import asyncio
 import logging
 
 import redis.asyncio as redis
@@ -53,7 +54,24 @@ class AgentStateStore:
     """Thin async wrapper around one Redis connection pool."""
 
     def __init__(self, redis_url: str) -> None:
-        self._client = redis.Redis.from_url(redis_url, decode_responses=True)
+        self._redis_url = redis_url
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._redis_client: redis.Redis | None = None
+
+    def _get_client(self) -> redis.Redis:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if self._redis_client is None or self._loop is not current_loop:
+            self._loop = current_loop
+            self._redis_client = redis.Redis.from_url(self._redis_url, decode_responses=True)
+        return self._redis_client
+
+    @property
+    def _client(self) -> redis.Redis:
+        return self._get_client()
 
     async def save(self, task_id: str, state: AgentState) -> None:
         await self._client.set(
@@ -87,7 +105,10 @@ class AgentStateStore:
         await self._client.delete(_key(task_id))
 
     async def close(self) -> None:
-        await self._client.aclose()
+        if self._redis_client is not None:
+            await self._redis_client.aclose()
+            self._redis_client = None
+            self._loop = None
 
 
 agent_state_store = AgentStateStore(config.REDIS_URL)

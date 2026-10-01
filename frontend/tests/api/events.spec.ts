@@ -14,6 +14,7 @@ describe('SSE contract', () => {
         'artifact_created',
         'done',
         'require_confirm',
+        'system_reminder',
         'task_renamed',
         'task_todos_changed',
         'text_delta',
@@ -22,6 +23,15 @@ describe('SSE contract', () => {
         'tool_call_start',
       ].sort(),
     )
+  })
+
+  it('parses a system_reminder frame', () => {
+    const frame =
+      'event: system_reminder\ndata: {"block_id":"b1","source":"system","content":"时间: 2026-10-01"}\n\n'
+    expect(parseSseFrame(frame)).toEqual({
+      event: 'system_reminder',
+      data: { block_id: 'b1', source: 'system', content: '时间: 2026-10-01' },
+    })
   })
 
   it('parses a text_delta frame', () => {

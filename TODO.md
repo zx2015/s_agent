@@ -3,22 +3,63 @@
 > 本文件随代码纳入版本控制。完成事项移至"已完成"并标注日期，严禁直接删除。
 
 ## 进行中
-- （无）
+- （暂无进行中任务）
 
 ## 待办
-- [ ] 实现"卸载"（offload）与"长期记忆"（跨任务 RAG 知识库）—— 四大记忆机制里剩下的两项；"上下文注入"与"压缩"其实是 AgentScope 默认就自带的（`InjectionConfig`/`ContextConfig` 未做任何定制，走的是框架默认值），已在会话历史持久化那条里连带记录，不再单列 — 优先级：中（阶段一 spec 模块 D）
-- [ ] 校准 `OpenAIChatModel(context_size=...)`：目前用的是 AgentScope 默认值 128000 token，未针对 `v-flash` 实际上下文窗口校正，影响自动压缩的触发时机 — 优先级：中
 - [ ] 实现 HITL 权限引擎的精细化规则（当前仅接入 AgentScope 内置 Bash/Write/Edit 危险模式检测的 ASK 行为，未做自定义黑名单/白名单）— 优先级：中（阶段一 spec 模块 E）
-- [ ] 移植股票分析项目 calculator.py 的完整功能（当前 `server/tools/calculator.py` 只是一个受限 AST 四则运算求值器，未覆盖股票场景的 Sharpe/回撤等函数）— 优先级：中
 - [ ] 跑通"通用 Agent"端到端最小闭环后，再规划股票分析改造 — 优先级：中（依赖真实 key 验证）
 - [ ] 评估复用 `/media/data/git/股票分析/scripts/tencent_stock.py` 作为 Toolkit 工具 — 优先级：低（阶段二）
 - [ ] 设计 portfolio JSON 读写工具（遵守无引号规范）— 优先级：低（阶段二）
 - [ ] 生产环境的 `workspaces/` 目录清理与磁盘配额策略 — 优先级：低
-- [ ] 优化标题生成延迟：当前 `main.py` 在 `agent.reply_stream` 开始前先 `await title_task`，导致 LiteLLM 响应慢时首字被阻塞 2~3 秒；应改在流式内部并发异步执行，完成后单独 yield `task_renamed` 帧 — 优先级：中（来自 review 建议）
-- [ ] 完善 `<system-reminder>` SSE 透传：AgentScope 自动插入的运行时提醒（HintBlockEvent）当前在 `events.py` 中被静默返回 `[]`，若需在前端呈现模型接收到的系统环境提示，可补充对应事件映射 — 优先级：低（来自 review 建议）
-- [ ] 修复"归档"按钮：`TaskHeaderBar.vue` 的归档目前只调用 `workspaceStore.archiveTask`，只在前端内存里隐藏任务，从没调用过后端——刷新页面（重新 `fetchWorkspaces`）后归档过的任务会原样出现。做"删除对话"功能时顺带发现，未修复（不在本次需求范围内）— 优先级：低
 
 ## 已完成
+- [x] 设置抽屉配置接入后端与任务头部操作按钮全链路闭环 — 2026-10-01
+  - 后端接口与持久化闭环：
+    - `TaskOut` 与 `UpdateTaskRequest` 增加 `is_archived: bool` 与 `workspace_path: str`；
+    - 新增 `GET /api/system/info`（工作区物理根路径、默认模型、API 端点、HITL 严格度）；
+    - 新增 `POST /api/tasks/{task_id}/archive`（状态落盘且刷新页面不复活）；
+    - 新增 `POST /api/tasks/{task_id}/reset-context`（清理 Redis 中的 `AgentState` 与 TaskManager 内存 Agent 实例）；
+    - `POST /api/chat` 接收 `model_name`、`base_url`、`hitl_mode` 并平滑热重建 Agent 实例，保留状态上下文；
+  - 前端设置抽屉（SettingsDrawer.vue & settings.ts）：
+    - 接入后端 `fetchSystemInfo()`，真实展示“工作区根目录”物理路径；
+    - 增加 LiteLLM 预设模型列表 datalist 供快速选择与输入；
+    - 实现系统主题切换（深色/浅色模式切换），状态持久化至 `localStorage` 与 DOM `data-theme` 属性；
+    - global.css 补齐 `[data-theme='dark']` 基础背景与色系适配；
+  - 任务头部操作条（TaskHeaderBar.vue & useChat.ts）：
+    - 增加当前任务所属工作区名称与物理路径徽标展示；
+    - 新增醒目的流式生成「⏹ 强制中断」按钮（共享 `AbortController` 绑定 `apiClient.stream` 并安全处理 `AbortError`）；
+    - 「归档」操作接入 `archiveTaskRemote`，后端落盘并自动同步树状态；
+    - 「清空会话上下文」接入 `resetTaskContextRemote` + 前端 `session.reset()` 双端闭环；
+  - 全链路测试保障：
+    - 后端扩充 `tests/test_task_manager.py` 与 `tests/test_chat_stream.py`（94 个 pytest 单测 100% 通过）；
+    - 前端扩充 `tests/store/settings.spec.ts` 与 `tests/components/ChatInputAndHeader.spec.ts`（138 个 Vitest 单测 100% 通过）。
+  - 设计文档与架构：编写 `docs/specs/2026-10-01-context-calibration-and-task-lock-design.md`，确立自适应四级探测流水线与 task 级独占锁生命周期规范；
+  - 自适应校准流水线：实现 `server/agent/calibrator.py`（支持显式配置覆盖、LiteLLM `/model/info` 与 `/models` 主动嗅探、知名模型家族正则匹配规则库、安全兜底及进程内存缓存）；并在 `server/config.py` 支持 `S_AGENT_MODEL_CONTEXT_SIZE="auto"`；
+  - 任务并发互斥锁与 409 防御：在 `server/service/task_manager.py` 中引入 `get_task_lock(task_id)`，并在 `server/main.py` 的 `/api/chat` 入口处实现 `lock.locked()` 瞬时检测与立即抛出 `HTTP 409 Conflict`；在 `event_stream()` 生命周期内独占持有并在 `finally` 保证释放；
+  - 前端错误友好交互：在 `frontend/src/composables/useChat.ts` 中拦截 `ApiError.status === 409`，呈现 `[任务正在处理上一条消息，请稍后再试]` 友好提示；
+  - 全量自动化测试验证：新增 `tests/test_calibrator.py`（覆盖显式覆盖、探测成功、端点回退、正则启发式与安全兜底）与 `tests/test_task_concurrency.py`（覆盖锁生命周期、并发 409 拦截与任务间互不阻塞隔离）；后端 89 个单测、前端 133 个单测全部 100% 通过。
+
+- [x] 实现长期记忆（跨任务 Markdown 记忆库与异步语义召回）— 2026-10-01
+  - 设计文档与架构：编写 `docs/specs/2026-10-01-longterm-memory-design.md`，选型方案 B（基于 AgentScope 2.0.8 原生 `AgenticMemoryMiddleware`，零外部向量数据库重依赖）；
+  - 配置集成：在 `server/config.py` 中新增 `LONGTERM_MEMORY_ENABLED`、`LONGTERM_MEMORY_DIR`（默认 `data/memory/`，受 `.gitignore` 保护）、`LONGTERM_MEMORY_MAX_TOKENS` 与 `LONGTERM_MEMORY_RETRIEVAL_MAX_TOKENS`；
+  - 中间件定制与装配：在 `server/agent/core.py` 中编写符合中文及金融股票投资场景的 `CHINESE_MEMORY_INSTRUCTIONS`，为 `build_agent` 装配 `AgenticMemoryMiddleware`，并幂等初始化 `MEMORY.md` 索引；
+  - 全链路测试保障：编写 `tests/test_longterm_memory.py`（6 个单测全部通过），覆盖索引构建、System Prompt 紧凑注入、Frontmatter 解析、基于意图的异步检索与 HintBlock 注入、以及跨 Task A / Task B 的记忆共享机制；后端 82 个单测全部通过。
+
+- [x] 删除任务创建时初始化 Git 仓库功能 — 2026-10-01
+  - 简化工作区：从 `server/service/task_manager.py` 的 `create_task()` 中移除 `_init_git()` 调用，并删除 `_init_git()` 对应实现；
+  - 路由安全守护：在 `server/main.py` 的 `/api/tasks/{task_id}/git-diff` 中增加 `.git` 目录存在性校验，避免非 git 目录抛错；
+  - 单测覆盖：在 `tests/test_task_manager.py` 中新增 `test_create_task_does_not_initialize_git` 验证。
+- [x] 实现上下文卸载（Context Offload）与模型 Context Size 校准 — 2026-10-01
+  - 核心接入：在 `server/agent/core.py` 中为 `Agent` 挂载 `LocalWorkspace(workdir=resolved_dir)` 作为 `offloader`，配置 `ContextConfig(tool_result_limit=...)`；
+  - 参数配置：在 `server/config.py` 中增加 `TOOL_RESULT_LIMIT`（默认 8000 token）、`CONTEXT_TRIGGER_RATIO`、`CONTEXT_RESERVE_RATIO` 与 `MODEL_CONTEXT_SIZE`（128000 token）环境变量；
+  - 修复 AgentScope 2.0.8 上游 Bug：修正 `_split_tool_result_for_compression` 中工具输出为字符串时的字符切片与类型校验错误；
+  - 空间隔离：在任务初始化 `_init_git` 时生成 `.gitignore`，自动排除 `sessions/`、`data/`、`.skills/` 离线目录；
+  - 测试验证：编写 `tests/test_context_offload.py`（5 个用例全部通过），涵盖超长工具输出落盘、Read 工具回读、对话历史 context.jsonl 归档及 Base64 图像落盘。
+- [x] 核心改进三大项设计与实施（金融计算器移植、首字响应延迟优化、`<system-reminder>` 全链路透传）— 2026-10-01
+  - 设计文档与规范：输出 `docs/specs/2026-10-01-core-improvements-design.md`，并在 `.learnings/index.md` 建立索引；
+  - 计算器移植：`server/tools/calculator.py` 完整移植股票分析项目 `Calculator` 静态类（含 Sharpe、最大回撤、PnL、波动率等），升级 AST 白名单求值器支持列表/元组与函数直接调用，扩展 `tests/test_calculator.py`（11 个单测全部通过）；
+  - 首字延迟优化：`server/main.py` 重构 `event_stream`，改用异步多路复用队列 `asyncio.Queue` 解耦 `title_task` 与 `agent.reply_stream`，消除标题生成对首字 2~3 秒的阻塞，新增 `tests/test_chat_stream.py` 验证首字零阻塞与标题协同流式输出；
+  - `<system-reminder>` 透传：后端 `server/service/events.py` 将 `HintBlockEvent` 翻译为 `system_reminder` 帧并补充单测；前端 `frontend/src/api/events.ts`、`frontend/src/types/index.ts`、`frontend/src/store/session.ts` 同步注册并处理，双端 100% 测试通过。
 - [x] 初始化项目基础设施（.learnings / .gitignore / TODO.md / CLAUDE.md）— 2026-09-28
 - [x] 选定模型 provider：本机 LiteLLM 的 `v-flash`，并完成端到端流式验证 — 2026-09-28
 - [x] 确认运行环境：venv 为 Python 3.12.14，已装 agentscope 1.0.21 / fastapi 0.139 / uvicorn 0.43 — 2026-09-28

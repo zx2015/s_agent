@@ -12,20 +12,23 @@
  * so integration testing is a one-line diff.
  */
 import { ref } from 'vue'
-import { apiClient } from '@/api/client'
+import { apiClient, ApiError } from '@/api/client'
 import { parseSseFrame } from '@/api/events'
 import { mockTurn } from '@/mock/sse-server'
 import { useSessionStore } from '@/store/session'
+import { useSettingsStore } from '@/store/settings'
 import { useTodosStore } from '@/store/todos'
 import { useWorkspaceStore } from '@/store/workspaces'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+const sharedAbortController = ref<AbortController | null>(null)
 
 export function useChat() {
   const session = useSessionStore()
   const workspace = useWorkspaceStore()
   const todos = useTodosStore()
-  const abortController = ref<AbortController | null>(null)
+  const settings = useSettingsStore()
+  const abortController = sharedAbortController
 
   /**
    * Make sure a task is selected before running a turn, creating one on
@@ -109,10 +112,17 @@ export function useChat() {
     abortController.value = controller
 
     try {
-      for await (const parsed of apiClient.stream('/api/chat', {
-        task_id: taskId,
-        message,
-      })) {
+      for await (const parsed of apiClient.stream(
+        '/api/chat',
+        {
+          task_id: taskId,
+          message,
+          model_name: settings.modelName,
+          base_url: settings.baseUrl,
+          hitl_mode: settings.hitlMode,
+        },
+        controller.signal,
+      )) {
         // Not a chat-transcript frame — routed straight to the workspace
         // store instead of `session.applyFrame` (which is turn-guarded
         // for message content, see `store/session.ts`). `renameTask` is
@@ -129,13 +139,25 @@ export function useChat() {
         }
         session.applyFrame(parsed as never)
       }
-    } catch {
-      // The stream can fail mid-flight (backend restart, network drop).
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        session.applyFrame({
+          event: 'done',
+          data: { task_status: 'aborted' },
+        } as never)
+        return
+      }
+
+      // The stream can fail mid-flight (backend restart, network drop, or 409 conflict).
       // Surface it in the transcript rather than leaving a spinner that
       // never resolves.
+      const errorText =
+        err instanceof ApiError && err.status === 409
+          ? '\n\n[任务正在处理上一条消息，请稍后再试]'
+          : '\n\n[连接中断]'
       session.applyFrame({
         event: 'text_delta',
-        data: { text: '\n\n[连接中断]' },
+        data: { text: errorText },
       } as never)
       session.applyFrame({
         event: 'done',

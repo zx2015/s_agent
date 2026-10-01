@@ -7,6 +7,7 @@ import json
 import pytest
 
 from agentscope.event import (
+    HintBlockEvent,
     ReplyEndEvent,
     RequireUserConfirmEvent,
     TextBlockDeltaEvent,
@@ -16,7 +17,7 @@ from agentscope.event import (
     ToolResultEndEvent,
     ToolResultTextDeltaEvent,
 )
-from agentscope.message import ToolCallBlock, ToolResultState
+from agentscope.message import TextBlock, ToolCallBlock, ToolResultState
 from agentscope.types import ErrorInfo
 
 from server.service.events import (
@@ -170,3 +171,38 @@ def test_task_todos_changed_frame():
 def test_sse_frame_rejects_unknown_event():
     with pytest.raises(ValueError, match="Unknown SSE event"):
         sse_frame("unknown_event_type", {})
+
+
+def test_hint_block_frame_with_string_hint():
+    translator = AgentEventTranslator()
+    frames = translator.translate(
+        HintBlockEvent(
+            reply_id="r1",
+            block_id="b_hint_1",
+            source="system",
+            hint="当前时间为 2026-10-01 12:00:00",
+        )
+    )
+    event, data = _parse_one(frames)
+    assert event == "system_reminder"
+    assert data["block_id"] == "b_hint_1"
+    assert data["source"] == "system"
+    assert data["content"] == "当前时间为 2026-10-01 12:00:00"
+
+
+def test_hint_block_frame_with_block_list_hint():
+    translator = AgentEventTranslator()
+    frames = translator.translate(
+        HintBlockEvent(
+            reply_id="r1",
+            block_id="b_hint_2",
+            source="reminder",
+            hint=[TextBlock(type="text", text="第一行提示\n"), TextBlock(type="text", text="第二行提示")],
+        )
+    )
+    event, data = _parse_one(frames)
+    assert event == "system_reminder"
+    assert data["block_id"] == "b_hint_2"
+    assert data["source"] == "reminder"
+    assert data["content"] == "第一行提示\n第二行提示"
+

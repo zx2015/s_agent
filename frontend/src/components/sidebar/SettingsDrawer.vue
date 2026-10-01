@@ -19,13 +19,59 @@
       <section class="drawer-section">
         <label class="field">
           <span class="field-label">模型</span>
-          <input v-model="modelInput" class="field-input" />
+          <input
+            v-model="modelInput"
+            class="field-input"
+            list="litellm-models"
+            placeholder="输入或选择模型"
+          />
+          <datalist id="litellm-models">
+            <option
+              v-for="model in settings.availableModels"
+              :key="model"
+              :value="model"
+            />
+          </datalist>
         </label>
 
         <label class="field">
           <span class="field-label">API 端点</span>
           <input v-model="baseUrlInput" class="field-input" />
         </label>
+
+        <label class="field">
+          <span class="field-label">工作区根目录</span>
+          <input
+            :value="settings.workspaceRoot || '加载中...'"
+            readonly
+            class="field-input readonly-input"
+            title="后端工作区物理存储根目录"
+          />
+        </label>
+      </section>
+
+      <section class="drawer-section">
+        <span class="field-label">系统主题</span>
+        <div class="radio-group theme-options">
+          <label class="radio">
+            <input
+              type="radio"
+              value="light"
+              :checked="settings.theme === 'light'"
+              @change="settings.setTheme('light')"
+            />
+            <span>☀️ 浅色模式</span>
+          </label>
+          <label class="radio">
+            <input
+              type="radio"
+              value="dark"
+              :checked="settings.theme === 'dark'"
+              @change="settings.setTheme('dark')"
+            />
+            <span>🌙 深色模式</span>
+          </label>
+        </div>
       </section>
 
       <section class="drawer-section">
@@ -54,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useSettingsStore, type HitlMode } from '@/store/settings'
 
 const settings = useSettingsStore()
@@ -62,9 +108,18 @@ const settings = useSettingsStore()
 const modelInput = ref(settings.modelName)
 const baseUrlInput = ref(settings.baseUrl)
 
+onMounted(() => {
+  settings.fetchSystemInfo()
+})
+
 // Keep the local buffers in step when the store changes from elsewhere.
 watch(() => settings.modelName, (value) => (modelInput.value = value))
 watch(() => settings.baseUrl, (value) => (baseUrlInput.value = value))
+watch(() => settings.drawerOpen, (open) => {
+  if (open) {
+    settings.fetchSystemInfo()
+  }
+})
 
 watch(modelInput, (value) => settings.setModel(value))
 watch(baseUrlInput, (value) => settings.setBaseUrl(value))
@@ -89,11 +144,13 @@ const hitlOptions: Array<{ value: HitlMode; label: string }> = [
 .drawer {
   width: 360px;
   height: 100%;
-  background: #fff;
+  background: var(--color-bg-base, #fff);
+  color: var(--color-text);
   display: flex;
   flex-direction: column;
   padding: 16px;
   gap: 20px;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
 }
 
 .drawer-header {
@@ -121,7 +178,7 @@ const hitlOptions: Array<{ value: HitlMode; label: string }> = [
 
 .field-label {
   font-size: 13px;
-  color: #4e5969;
+  color: var(--color-text-secondary, #4e5969);
 }
 
 .field-input {
@@ -129,6 +186,14 @@ const hitlOptions: Array<{ value: HitlMode; label: string }> = [
   border: 1px solid var(--color-border);
   border-radius: 6px;
   font-size: 13px;
+  background: var(--color-bg-base, #fff);
+  color: var(--color-text);
+}
+
+.readonly-input {
+  background: var(--color-bg-subtle, #f7f8fa);
+  color: var(--color-text-muted);
+  cursor: default;
 }
 
 .radio-group {
@@ -142,6 +207,7 @@ const hitlOptions: Array<{ value: HitlMode; label: string }> = [
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  cursor: pointer;
 }
 
 .drawer-footer {
@@ -158,5 +224,6 @@ const hitlOptions: Array<{ value: HitlMode; label: string }> = [
   border: none;
   cursor: pointer;
   font-size: 14px;
+  color: var(--color-text);
 }
 </style>

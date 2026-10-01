@@ -67,3 +67,41 @@ MCP_SERVERS = os.getenv(
     "S_AGENT_MCP_SERVERS",
     '[{"name": "tavily", "url": "http://127.0.0.1:18000/mcp"}]',
 )
+
+# --- Context Offload & Compression Configuration ---
+# Maximum token count allowed for a single tool result before it is offloaded
+# to disk (workspaces/<task_id>/sessions/<session_id>/tool_result-<id>.txt)
+# and replaced by an excerpt with pointer reminder.
+TOOL_RESULT_LIMIT = int(os.getenv("S_AGENT_TOOL_RESULT_LIMIT", "8000"))
+# Context compression trigger ratio against model context_size (default 0.8)
+CONTEXT_TRIGGER_RATIO = float(os.getenv("S_AGENT_CONTEXT_TRIGGER_RATIO", "0.8"))
+# Ratio of recent messages to preserve intact when compression triggers
+CONTEXT_RESERVE_RATIO = float(os.getenv("S_AGENT_CONTEXT_RESERVE_RATIO", "0.1"))
+# Main agent model context window size (tokens).
+# If set to "auto" or empty/0 (default), dynamically calibrated by server/agent/calibrator.py.
+# If set to an explicit positive integer, that value will be used directly as an override.
+_model_context_size_env = os.getenv("S_AGENT_MODEL_CONTEXT_SIZE", "auto").strip().lower()
+MODEL_CONTEXT_SIZE = (
+    int(_model_context_size_env)
+    if _model_context_size_env.isdigit() and int(_model_context_size_env) > 0
+    else 0
+)
+
+# --- Long-term Memory (跨任务持久化记忆) ---
+# 是否启用跨任务长期记忆中间件
+LONGTERM_MEMORY_ENABLED = (
+    os.getenv("S_AGENT_LONGTERM_MEMORY_ENABLED", "true").lower() == "true"
+)
+# 长期记忆根目录（所有任务共享，默认位于 data/memory）
+LONGTERM_MEMORY_DIR = Path(
+    os.getenv("S_AGENT_LONGTERM_MEMORY_DIR", str(REPO_ROOT / "data" / "memory")),
+)
+# MEMORY.md 索引常驻 System Prompt 的最大 Token 限制
+LONGTERM_MEMORY_MAX_TOKENS = int(
+    os.getenv("S_AGENT_LONGTERM_MEMORY_MAX_TOKENS", "4000"),
+)
+# 每次异步召回单篇记忆文件的最大 Token 限制（防上下文冲刷）
+LONGTERM_MEMORY_RETRIEVAL_MAX_TOKENS = int(
+    os.getenv("S_AGENT_LONGTERM_MEMORY_RETRIEVAL_MAX_TOKENS", "2000"),
+)
+

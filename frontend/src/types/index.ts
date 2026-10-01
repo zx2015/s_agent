@@ -9,12 +9,20 @@ export interface Task {
   status: TaskStatus
   updatedAt: string
   hasArtifacts: boolean
+  isArchived?: boolean
+  workspacePath?: string
 }
 
 export interface Workspace {
   id: string
   name: string
   tasks: Task[]
+}
+
+export interface SystemReminder {
+  blockId: string
+  source: string
+  content: string
 }
 
 export interface ChatMessage {
@@ -26,6 +34,8 @@ export interface ChatMessage {
   thinking: string
   /** Tool invocations in this turn, in order. */
   toolCalls: ToolCallRecord[]
+  /** System reminders (e.g. environment block, time, memory hints) */
+  systemReminders?: SystemReminder[]
   /** Set while the turn is still streaming. */
   streaming: boolean
 }

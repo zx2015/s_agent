@@ -24,6 +24,8 @@ class TaskOut(BaseModel):
     status: Literal["running", "completed", "suspended", "failed"]
     updated_at: str
     has_artifacts: bool
+    is_archived: bool = False
+    workspace_path: str = ""
 
 
 class WorkspaceOut(BaseModel):
@@ -52,6 +54,7 @@ class UpdateTaskRequest(BaseModel):
 
     title: str | None = None
     status: Literal["running", "completed", "suspended", "failed"] | None = None
+    is_archived: bool | None = None
 
 
 class ChatRequest(BaseModel):
@@ -59,6 +62,9 @@ class ChatRequest(BaseModel):
 
     task_id: str
     message: str
+    model_name: str | None = None
+    base_url: str | None = None
+    hitl_mode: Literal["always", "dangerous", "never"] | None = None
 
 
 class ConfirmRequest(BaseModel):

@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSettingsStore } from '@/store/settings'
+import { apiClient } from '@/api/client'
 
 describe('settings store', () => {
   beforeEach(() => {
@@ -39,5 +40,29 @@ describe('settings store', () => {
     expect(store.drawerOpen).toBe(true)
     store.closeDrawer()
     expect(store.drawerOpen).toBe(false)
+  })
+
+  it('updates theme and document data-theme attribute', () => {
+    const store = useSettingsStore()
+    store.setTheme('dark')
+    expect(store.theme).toBe('dark')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    expect(localStorage.getItem('s_agent_theme')).toBe('dark')
+
+    store.setTheme('light')
+    expect(store.theme).toBe('light')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+  })
+
+  it('fetches system info and updates workspaceRoot', async () => {
+    const store = useSettingsStore()
+    vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
+      workspaceRoot: '/test/workspaces',
+      modelName: 'v-flash',
+      baseUrl: 'http://127.0.0.1:4000/v1',
+      hitlMode: 'dangerous',
+    })
+    await store.fetchSystemInfo()
+    expect(store.workspaceRoot).toBe('/test/workspaces')
   })
 })

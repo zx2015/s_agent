@@ -170,6 +170,20 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
+      case 'system_reminder': {
+        const message = currentAssistant.value
+        if (!message) return
+        if (!message.systemReminders) {
+          message.systemReminders = []
+        }
+        message.systemReminders.push({
+          blockId: String(parsed.data.block_id ?? ''),
+          source: String(parsed.data.source ?? 'system'),
+          content: String(parsed.data.content ?? ''),
+        })
+        return
+      }
+
       case 'done': {
         const message = currentAssistant.value
         if (message) message.streaming = false

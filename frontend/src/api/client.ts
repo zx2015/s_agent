@@ -90,6 +90,7 @@ export class ApiClient {
   async *stream(
     path: string,
     body: unknown,
+    signal?: AbortSignal,
   ): AsyncGenerator<{ event: string; data: Record<string, unknown> }> {
     const response = await fetch(this.url(path), {
       method: 'POST',
@@ -98,6 +99,7 @@ export class ApiClient {
         Accept: 'text/event-stream',
       },
       body: JSON.stringify(body),
+      signal,
     })
 
     if (!response.ok || !response.body) {

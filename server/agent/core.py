@@ -19,12 +19,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from agentscope.agent import Agent
+from agentscope.agent import Agent, ContextConfig
 from agentscope.credential import OpenAICredential
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope.model import OpenAIChatModel
-from agentscope.permission import PermissionBehavior, PermissionDecision
+from agentscope.middleware import AgenticMemoryMiddleware
+from agentscope.permission import (
+    PermissionBehavior,
+    PermissionDecision,
+    PermissionMode,
+    PermissionRule,
+)
 from agentscope.state import AgentState
+from agentscope.workspace import LocalWorkspace
 from agentscope.tool import (
     AskUser,
     Bash,
@@ -43,6 +50,7 @@ from agentscope.tool import (
 )
 
 from server import config
+from server.agent.calibrator import resolve_context_size
 from server.tools.calculator import calculate
 from server.tools.mcp import build_mcp_clients, parse_mcp_servers
 
@@ -75,6 +83,34 @@ SYSTEM_PROMPT_TEMPLATE = (
     "用户发来的新指令。\n\n"
     "{environment_block}"
 )
+
+CHINESE_MEMORY_INSTRUCTIONS = """\
+你有位于 `{memory_dir}` 的跨任务持久化文件记忆库。该目录已存在且所有任务共享，请通过 `Write`、`Edit`、`Read` 工具直接读写该目录。
+
+记忆库用于跨任务沉淀用户画像、偏好、协作准则、量化投资与业务事实，使后续的新任务或新会话能够持续复用。
+
+## 记忆分类 (Types)
+- **user**：用户的角色、投资偏好、风险承受能力、硬性要求等持久特征；
+- **feedback**：用户给出的纠错、交互准则、“不要做X / 必须做Y”的指导；
+- **project**：长期业务上下文、关注的股票标的、特定项目背景；
+- **reference**：外部数据源、计算公式（如夏普比率、最大回撤计算规范）等指针。
+
+## 记忆保存两步法
+1. **第一步**：创建或更新具体卡片文件（如 `{memory_dir}/user_risk_pref.md`），文件头部必须包含 YAML frontmatter：
+---
+name: <唯一标识>
+description: <检索触发条件，一句话明确说明在何种情境/提问下未来必须召回此记忆>
+type: user | feedback | project | reference
+---
+正文内容...
+
+2. **第二步**：在 `{memory_dir}/MEMORY.md` 索引文件中追加或更新一行索引（每行不超过 150 字符）：
+- [name](filename.md) — 简要描述与触发情境
+
+## 检索与查阅
+- 在每轮回复时，系统会自动评估相关记忆并以 Hint 形式注入上下文；
+- 你也可以在需要时使用 `Read` 或 `Grep` 工具主动查阅 `{memory_dir}` 下的文件。
+"""
 
 
 def _detect_shell() -> str:
@@ -121,7 +157,14 @@ def _build_environment_block(workspace_dir: Path) -> str:
     return "\n".join(lines)
 
 
-async def build_agent(workspace_dir: Path, state: AgentState | None = None) -> Agent:
+async def build_agent(
+    workspace_dir: Path,
+    state: AgentState | None = None,
+    memory_dir: Path | str | None = None,
+    model_name: str | None = None,
+    base_url: str | None = None,
+    hitl_mode: str | None = None,
+) -> Agent:
     """Assemble the toolkit and the model-backed agent for one task.
 
     Args:
@@ -133,6 +176,12 @@ async def build_agent(workspace_dir: Path, state: AgentState | None = None) -> A
             `server/service/memory_store.py`). When `None`, the agent
             starts with empty conversation history, same as before
             persistence existed.
+        memory_dir: Optional custom directory for long-term memory.
+            Defaults to `config.LONGTERM_MEMORY_DIR`.
+        model_name: Optional model override. Defaults to `config.MODEL_NAME`.
+        base_url: Optional API endpoint override. Defaults to `config.LITELLM_BASE_URL`.
+        hitl_mode: Optional human-in-the-loop mode ('always', 'dangerous', 'never').
+            Defaults to 'dangerous'.
     """
     workspace_dir.mkdir(parents=True, exist_ok=True)
     resolved_dir = str(workspace_dir.resolve())
@@ -177,22 +226,58 @@ async def build_agent(workspace_dir: Path, state: AgentState | None = None) -> A
         ),
     )
 
+    effective_model = model_name or config.MODEL_NAME
+    effective_base_url = base_url or config.LITELLM_BASE_URL
+    effective_hitl_mode = hitl_mode or "dangerous"
+
     credential = OpenAICredential(
-        id="litellm-vflash",
-        name="LiteLLM v-flash",
+        id="litellm-credential",
+        name=effective_model,
         api_key=config.LITELLM_API_KEY,
-        base_url=config.LITELLM_BASE_URL,
+        base_url=effective_base_url,
+    )
+    effective_context_size = await resolve_context_size(
+        model_name=effective_model,
+        base_url=effective_base_url,
+        api_key=config.LITELLM_API_KEY,
     )
     model = OpenAIChatModel(
         credential=credential,
-        model=config.MODEL_NAME,
+        model=effective_model,
         formatter=OpenAIChatFormatter(),
+        context_size=effective_context_size,
         parameters=OpenAIChatModel.Parameters(
             max_tokens=config.MODEL_MAX_TOKENS,
         ),
     )
 
-    return Agent(
+    workspace = LocalWorkspace(workdir=resolved_dir)
+    context_config = ContextConfig(
+        tool_result_limit=config.TOOL_RESULT_LIMIT,
+        trigger_ratio=config.CONTEXT_TRIGGER_RATIO,
+        reserve_ratio=config.CONTEXT_RESERVE_RATIO,
+    )
+
+    middlewares = []
+    if config.LONGTERM_MEMORY_ENABLED:
+        mem_path = Path(memory_dir or config.LONGTERM_MEMORY_DIR).resolve()
+        mem_path.mkdir(parents=True, exist_ok=True)
+        memory_md = mem_path / AgenticMemoryMiddleware.FILENAME_MEMORY_MD
+        if not memory_md.exists():
+            memory_md.write_bytes(b"")
+        memory_params = AgenticMemoryMiddleware.Parameters(
+            memory_instructions=CHINESE_MEMORY_INSTRUCTIONS,
+            memory_max_tokens=config.LONGTERM_MEMORY_MAX_TOKENS,
+            retrieval_max_tokens_per_md=config.LONGTERM_MEMORY_RETRIEVAL_MAX_TOKENS,
+        )
+        memory_middleware = AgenticMemoryMiddleware(
+            workdir=str(mem_path.parent),
+            memory_dir=mem_path.name,
+            parameters=memory_params,
+        )
+        middlewares.append(memory_middleware)
+
+    agent = Agent(
         name="Assistant",
         system_prompt=SYSTEM_PROMPT_TEMPLATE.format(
             workspace_dir=resolved_dir,
@@ -200,5 +285,31 @@ async def build_agent(workspace_dir: Path, state: AgentState | None = None) -> A
         ),
         model=model,
         toolkit=toolkit,
+        middlewares=middlewares,
         state=state,
+        offloader=workspace,
+        context_config=context_config,
     )
+
+    if effective_hitl_mode == "never":
+        agent._engine.context.mode = PermissionMode.BYPASS
+    elif effective_hitl_mode == "always":
+        agent._engine.context.mode = PermissionMode.DEFAULT
+        schemas = await toolkit.get_tool_schemas()
+        for s in schemas:
+            tool_name = s.get("function", {}).get("name")
+            if tool_name:
+                agent._engine.add_rule(
+                    PermissionRule(
+                        tool_name=tool_name,
+                        rule_content="",
+                        behavior=PermissionBehavior.ASK,
+                        source="userSettings",
+                    ),
+                )
+    else:  # "dangerous" or default
+        agent._engine.context.mode = PermissionMode.DEFAULT
+
+    agent._hitl_mode = effective_hitl_mode
+    return agent
+

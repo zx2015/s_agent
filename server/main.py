@@ -10,7 +10,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -96,10 +96,22 @@ async def delete_workspace(workspace_id: str) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/system/info")
+async def get_system_info() -> dict:
+    return {
+        "workspaceRoot": str(config.WORKSPACES_ROOT.resolve()),
+        "modelName": config.MODEL_NAME,
+        "baseUrl": config.LITELLM_BASE_URL,
+        "hitlMode": getattr(config, "HITL_MODE", "dangerous"),
+    }
+
+
 @app.post("/api/tasks")
 async def create_task(payload: CreateTaskRequest) -> dict:
     task = task_manager.create_task(payload.workspace_id, payload.title)
-    return TaskOut(**vars(task)).model_dump(by_alias=True)
+    task_dict = vars(task).copy()
+    task_dict["workspace_path"] = str(task_manager.workspace_dir(task.id).resolve())
+    return TaskOut(**task_dict).model_dump(by_alias=True)
 
 
 @app.patch("/api/tasks/{task_id}")
@@ -108,10 +120,32 @@ async def update_task(task_id: str, payload: UpdateTaskRequest) -> dict:
         task_id,
         title=payload.title,
         status=payload.status,
+        is_archived=payload.is_archived,
     )
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
-    return TaskOut(**vars(task)).model_dump(by_alias=True)
+    task_dict = vars(task).copy()
+    task_dict["workspace_path"] = str(task_manager.workspace_dir(task.id).resolve())
+    return TaskOut(**task_dict).model_dump(by_alias=True)
+
+
+@app.post("/api/tasks/{task_id}/archive")
+async def archive_task(task_id: str) -> dict:
+    task = task_manager.archive_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    task_dict = vars(task).copy()
+    task_dict["workspace_path"] = str(task_manager.workspace_dir(task.id).resolve())
+    return TaskOut(**task_dict).model_dump(by_alias=True)
+
+
+@app.post("/api/tasks/{task_id}/reset-context")
+async def reset_task_context(task_id: str) -> dict:
+    task = task_manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    await task_manager.reset_context(task_id)
+    return {"ok": True}
 
 
 @app.delete("/api/tasks/{task_id}")
@@ -160,6 +194,14 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
 
+    lock = task_manager.get_task_lock(payload.task_id)
+    if lock.locked():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Task {payload.task_id} is currently busy processing another message.",
+        )
+    await lock.acquire()
+
     # Every task is created with the same placeholder title ("新任务" —
     # see `SidebarLeft.vue`/`WorkspaceTree.vue`/`useChat.ts`'s
     # `ensureActiveTask`, all three task-creation paths use it), so it
@@ -172,104 +214,181 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
     if task.title == "新任务":
         title_task = asyncio.create_task(generate_title(payload.message))
 
-    async def event_stream():
+    async def _generate():
         try:
-            agent = await task_manager.get_or_create_agent(payload.task_id)
+            agent = await task_manager.get_or_create_agent(
+                payload.task_id,
+                model_name=payload.model_name,
+                base_url=payload.base_url,
+                hitl_mode=payload.hitl_mode,
+            )
         except Exception as exc:  # noqa: BLE001 - e.g. missing API key
             yield sse_frame("text_delta", {"text": f"[后端配置错误: {exc}]"})
             yield sse_frame("done", {"task_status": "failed"})
             return
 
-        if title_task is not None:
-            new_title = await title_task
-            task_manager.update_task(payload.task_id, title=new_title)
-            yield sse_frame("task_renamed", {"title": new_title})
+        queue: asyncio.Queue[str | object] = asyncio.Queue()
+        sentinel = object()
 
-        translator = AgentEventTranslator()
-        turn_started_at = time.time()
-        inputs = Msg(
-            name="user",
-            role="user",
-            content=[TextBlock(type="text", text=payload.message)],
-        )
+        async def _title_worker():
+            if title_task is None:
+                return
+            try:
+                new_title = await title_task
+                task_manager.update_task(payload.task_id, title=new_title)
+                await queue.put(sse_frame("task_renamed", {"title": new_title}))
+            except Exception:
+                # 标题生成失败不影响核心对话流
+                pass
+
+        title_worker_task: asyncio.Task | None = None
+        if title_task is not None:
+            title_worker_task = asyncio.create_task(_title_worker())
+
+        async def _agent_worker():
+            translator = AgentEventTranslator()
+            turn_started_at = time.time()
+            inputs = Msg(
+                name="user",
+                role="user",
+                content=[TextBlock(type="text", text=payload.message)],
+            )
+
+            try:
+                while True:
+                    pending_reply_id: str | None = None
+                    pending_tool_calls = None
+
+                    async for event in agent.reply_stream(inputs):
+                        if isinstance(event, RequireUserConfirmEvent):
+                            pending_reply_id = event.reply_id
+                            pending_tool_calls = event.tool_calls
+                            for frame in translator.translate(event):
+                                await queue.put(frame)
+                            break
+
+                        # Translate the event into SSE frames. Tools that
+                        # ended during this iteration get their buffer
+                        # popped by the translator; we capture the tool name
+                        # before/after to decide whether to send a fresh
+                        # `task_todos_changed` snapshot.
+                        tool_name_after: str | None = None
+                        if isinstance(event, ToolResultEndEvent):
+                            # Peek at the buffer the translator is about to pop.
+                            buf = translator._buffers.get(event.tool_call_id)
+                            tool_name_after = buf.tool_name if buf else None
+
+                        if isinstance(event, ReplyEndEvent):
+                            # 1. 确保任务重命名在完成前到达（若尚未完成则最多等 2 秒）
+                            if title_worker_task is not None and not title_worker_task.done():
+                                try:
+                                    await asyncio.wait_for(
+                                        asyncio.shield(title_worker_task),
+                                        timeout=2.0,
+                                    )
+                                except Exception:
+                                    pass
+
+                            # 2. 推送可能生成的新工件
+                            for frame in _new_artifact_frames(
+                                payload.task_id,
+                                turn_started_at,
+                            ):
+                                await queue.put(frame)
+
+                            # 3. 推送最终的 todo 状态快照
+                            await queue.put(
+                                final_todos_changed_frame(
+                                    serialize_todos(agent.state),
+                                )
+                            )
+
+                            # 4. 推送 done 结束帧
+                            for frame in translator.translate(event):
+                                await queue.put(frame)
+
+                            await task_manager.save_agent_state(payload.task_id)
+                            return
+
+                        for frame in translator.translate(event):
+                            await queue.put(frame)
+
+                        if isinstance(event, ToolResultEndEvent):
+                            # The translator's buffer has been popped during
+                            # `translate`. Re-serialise the todo list and emit
+                            # a snapshot when the just-finished tool was a
+                            # todo mutator.
+                            todos_now = serialize_todos(agent.state)
+                            todo_frames = todo_changed_after_tool(
+                                tool_name_after or "",
+                                todos_now,
+                            )
+                            if todo_frames is not None:
+                                for frame in todo_frames:
+                                    await queue.put(frame)
+
+                    if pending_reply_id is None:
+                        # The stream ended without a ReplyEndEvent or a confirm
+                        # request — close the turn defensively rather than
+                        # hanging the connection open.
+                        if title_worker_task is not None and not title_worker_task.done():
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.shield(title_worker_task),
+                                    timeout=2.0,
+                                )
+                            except Exception:
+                                pass
+                        await task_manager.save_agent_state(payload.task_id)
+                        await queue.put(sse_frame("done", {"task_status": "completed"}))
+                        return
+
+                    future = task_manager.wait_for_confirm(pending_reply_id)
+                    action = await future
+                    inputs = UserConfirmResultEvent(
+                        reply_id=pending_reply_id,
+                        confirm_results=[
+                            ConfirmResult(confirmed=action == "allow", tool_call=tc)
+                            for tc in pending_tool_calls
+                        ],
+                    )
+            except Exception as exc:  # noqa: BLE001 - surfaced to the client
+                await queue.put(sse_frame("text_delta", {"text": f"\n\n[后端错误: {exc}]"}))
+                await queue.put(sse_frame("done", {"task_status": "failed"}))
+            finally:
+                await queue.put(sentinel)
+
+        worker_tasks = [
+            asyncio.create_task(_agent_worker()),
+        ]
+        if title_worker_task is not None:
+            worker_tasks.append(title_worker_task)
 
         try:
             while True:
-                pending_reply_id: str | None = None
-                pending_tool_calls = None
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                yield item
+        finally:
+            for t in worker_tasks:
+                if not t.done():
+                    t.cancel()
 
-                async for event in agent.reply_stream(inputs):
-                    if isinstance(event, RequireUserConfirmEvent):
-                        pending_reply_id = event.reply_id
-                        pending_tool_calls = event.tool_calls
-                        for frame in translator.translate(event):
-                            yield frame
-                        break
+    async def event_stream():
+        try:
+            async for item in _generate():
+                yield item
+        finally:
+            if lock.locked():
+                lock.release()
 
-                    # Translate the event into SSE frames. Tools that
-                    # ended during this iteration get their buffer
-                    # popped by the translator; we capture the tool name
-                    # before/after to decide whether to send a fresh
-                    # `task_todos_changed` snapshot.
-                    tool_name_after: str | None = None
-                    if isinstance(event, ToolResultEndEvent):
-                        # Peek at the buffer the translator is about to pop.
-                        buf = translator._buffers.get(event.tool_call_id)
-                        tool_name_after = buf.tool_name if buf else None
-
-                    for frame in translator.translate(event):
-                        yield frame
-
-                    if isinstance(event, ToolResultEndEvent):
-                        # The translator's buffer has been popped during
-                        # `translate`. Re-serialise the todo list and emit
-                        # a snapshot when the just-finished tool was a
-                        # todo mutator.
-                        todos_now = serialize_todos(agent.state)
-                        todo_frames = todo_changed_after_tool(
-                            tool_name_after or "",
-                            todos_now,
-                        )
-                        if todo_frames is not None:
-                            for frame in todo_frames:
-                                yield frame
-
-                    if isinstance(event, ReplyEndEvent):
-                        for frame in _new_artifact_frames(
-                            payload.task_id,
-                            turn_started_at,
-                        ):
-                            yield frame
-                        # Always send one final todo snapshot so the
-                        # client converges even when no todo tool ran.
-                        yield final_todos_changed_frame(
-                            serialize_todos(agent.state),
-                        )
-                        await task_manager.save_agent_state(payload.task_id)
-                        return
-
-                if pending_reply_id is None:
-                    # The stream ended without a ReplyEndEvent or a confirm
-                    # request — close the turn defensively rather than
-                    # hanging the connection open.
-                    await task_manager.save_agent_state(payload.task_id)
-                    yield sse_frame("done", {"task_status": "completed"})
-                    return
-
-                future = task_manager.wait_for_confirm(pending_reply_id)
-                action = await future
-                inputs = UserConfirmResultEvent(
-                    reply_id=pending_reply_id,
-                    confirm_results=[
-                        ConfirmResult(confirmed=action == "allow", tool_call=tc)
-                        for tc in pending_tool_calls
-                    ],
-                )
-        except Exception as exc:  # noqa: BLE001 - surfaced to the client
-            yield sse_frame("text_delta", {"text": f"\n\n[后端错误: {exc}]"})
-            yield sse_frame("done", {"task_status": "failed"})
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    try:
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+    except Exception:
+        if lock.locked():
+            lock.release()
+        raise
 
 
 @app.post("/api/tasks/{task_id}/confirm")
@@ -307,7 +426,7 @@ async def git_diff(task_id: str) -> dict:
     import subprocess
 
     workspace = task_manager.workspace_dir(task_id)
-    if not workspace.exists():
+    if not workspace.exists() or not (workspace / ".git").is_dir():
         return {"diff": ""}
 
     result = subprocess.run(

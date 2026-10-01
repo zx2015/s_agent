@@ -25,17 +25,17 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
   const searchQuery = ref('')
   const activeTaskId = ref<string | null>(null)
 
-  /** Workspaces with their task lists filtered by the current query. */
+  /** Workspaces with their task lists filtered by the current query and archived status. */
   const filteredWorkspaces = computed<Workspace[]>(() => {
     const query = searchQuery.value.trim().toLowerCase()
-    if (!query) return workspaces.value
-
     return workspaces.value
       .map((workspace) => ({
         ...workspace,
-        tasks: workspace.tasks.filter((task) =>
-          task.title.toLowerCase().includes(query),
-        ),
+        tasks: workspace.tasks.filter((task) => {
+          if (task.isArchived) return false
+          if (!query) return true
+          return task.title.toLowerCase().includes(query)
+        }),
       }))
       .filter((workspace) => workspace.tasks.length > 0)
   })
@@ -87,6 +87,31 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     if (activeTaskId.value === taskId) {
       activeTaskId.value = null
     }
+  }
+
+  /**
+   * Persistently archive a task via the backend so it remains hidden
+   * across page refreshes.
+   */
+  async function archiveTaskRemote(taskId: string): Promise<void> {
+    if (activeTaskId.value === taskId) {
+      activeTaskId.value = null
+    }
+    await apiClient.post<Task>(`/api/tasks/${taskId}/archive`, {})
+    for (const workspace of workspaces.value) {
+      const index = workspace.tasks.findIndex((t) => t.id === taskId)
+      if (index >= 0) {
+        workspace.tasks.splice(index, 1)
+        break
+      }
+    }
+  }
+
+  /**
+   * Clear the agent's persisted state in Redis and in-memory cache on the backend.
+   */
+  async function resetTaskContextRemote(taskId: string): Promise<void> {
+    await apiClient.post(`/api/tasks/${taskId}/reset-context`, {})
   }
 
   /**
@@ -215,6 +240,8 @@ export const useWorkspaceStore = defineStore('workspaces', () => {
     selectTask,
     renameTask,
     archiveTask,
+    archiveTaskRemote,
+    resetTaskContextRemote,
     createTask,
     markArtifacts,
     fetchWorkspaces,

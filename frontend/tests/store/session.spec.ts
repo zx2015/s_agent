@@ -112,6 +112,24 @@ describe('session store', () => {
     expect(store.messages[0].toolCalls[0].summary).toBe('2')
   })
 
+  it('records system reminders on the assistant message', () => {
+    const store = useSessionStore()
+    store.beginAssistantTurn()
+    store.applyFrame(
+      frame('system_reminder', {
+        block_id: 'b1',
+        source: 'system',
+        content: '当前时间为 2026-10-01',
+      }),
+    )
+    expect(store.messages[0].systemReminders).toHaveLength(1)
+    expect(store.messages[0].systemReminders?.[0]).toEqual({
+      blockId: 'b1',
+      source: 'system',
+      content: '当前时间为 2026-10-01',
+    })
+  })
+
   it('marks the turn finished on done', () => {
     const store = useSessionStore()
     store.beginAssistantTurn()

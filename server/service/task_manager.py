@@ -52,6 +52,7 @@ class TaskRecord:
     status: str = "running"
     updated_at: str = field(default_factory=now_iso)
     has_artifacts: bool = False
+    is_archived: bool = False
 
 
 @dataclass
@@ -81,7 +82,9 @@ class TaskManager:
         self._workspaces: dict[str, WorkspaceRecord] = {}
         self._tasks: dict[str, TaskRecord] = {}
         self._agents: dict[str, Agent] = {}
+        self._agent_configs: dict[str, dict] = {}
         self._pending_confirms: dict[str, asyncio.Future] = {}
+        self._task_locks: dict[str, asyncio.Lock] = {}
         self._load()
         self._ensure_workspace("default", "默认工作区")
 
@@ -123,11 +126,16 @@ class TaskManager:
                 key=lambda t: t.updated_at,
                 reverse=True,
             )
+            tasks_out = []
+            for t in tasks:
+                t_dict = vars(t).copy()
+                t_dict["workspace_path"] = str(self.workspace_dir(t.id).resolve())
+                tasks_out.append(t_dict)
             result.append(
                 {
                     "id": workspace.id,
                     "name": workspace.name,
-                    "tasks": [vars(t) for t in tasks],
+                    "tasks": tasks_out,
                 },
             )
         return result
@@ -138,7 +146,6 @@ class TaskManager:
         task = TaskRecord(id=task_id, title=title, workspace_id=workspace_id)
         self._tasks[task_id] = task
         self.workspace_dir(task_id).mkdir(parents=True, exist_ok=True)
-        self._init_git(task_id)
         self._save()
         return task
 
@@ -147,6 +154,7 @@ class TaskManager:
         task_id: str,
         title: str | None = None,
         status: str | None = None,
+        is_archived: bool | None = None,
     ) -> TaskRecord | None:
         task = self._tasks.get(task_id)
         if task is None:
@@ -155,9 +163,14 @@ class TaskManager:
             task.title = title
         if status is not None:
             task.status = status
+        if is_archived is not None:
+            task.is_archived = is_archived
         task.updated_at = now_iso()
         self._save()
         return task
+
+    def archive_task(self, task_id: str) -> TaskRecord | None:
+        return self.update_task(task_id, is_archived=True)
 
     def mark_has_artifacts(self, task_id: str) -> None:
         task = self._tasks.get(task_id)
@@ -168,22 +181,36 @@ class TaskManager:
     def get_task(self, task_id: str) -> TaskRecord | None:
         return self._tasks.get(task_id)
 
+    def get_task_lock(self, task_id: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for the specified task_id to prevent concurrent turns."""
+        if task_id not in self._task_locks:
+            self._task_locks[task_id] = asyncio.Lock()
+        return self._task_locks[task_id]
+
+    async def reset_context(self, task_id: str) -> None:
+        """Clear the task's persisted conversation history from Redis and cached in-memory agent."""
+        self._agents.pop(task_id, None)
+        self._agent_configs.pop(task_id, None)
+        try:
+            await agent_state_store.delete(task_id)
+        except Exception:  # noqa: BLE001 - best-effort
+            logger.warning(
+                "Failed to clear Redis history during reset_context for %s",
+                task_id,
+                exc_info=True,
+            )
+
     async def delete_task(self, task_id: str) -> bool:
         """Permanently remove a task: metadata, cached agent, persisted
         conversation history, and the workspace directory on disk.
-
-        Unlike `archiveTask` on the frontend (which today only hides a
-        task locally without telling the backend anything — a
-        pre-existing, separate gap, not something this touches), this is
-        real, irreversible deletion. Returns `False` without touching
-        anything if the task doesn't exist, so the caller can 404
-        cleanly.
         """
         if task_id not in self._tasks:
             return False
 
         del self._tasks[task_id]
         self._agents.pop(task_id, None)
+        self._agent_configs.pop(task_id, None)
+        self._task_locks.pop(task_id, None)
         self._save()
 
         try:
@@ -236,38 +263,58 @@ class TaskManager:
     def workspace_dir(self, task_id: str) -> Path:
         return self.root_dir / task_id
 
-    def _init_git(self, task_id: str) -> None:
-        import subprocess
-
-        directory = self.workspace_dir(task_id)
-        subprocess.run(["git", "init", "-q"], cwd=directory, check=False)
-        subprocess.run(
-            ["git", "config", "user.email", "agent@s-agent.local"],
-            cwd=directory,
-            check=False,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "s_agent"],
-            cwd=directory,
-            check=False,
-        )
-        (directory / ".gitkeep").touch()
-        subprocess.run(["git", "add", "-A"], cwd=directory, check=False)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "init task workspace"],
-            cwd=directory,
-            check=False,
-        )
-
     # --- agents --------------------------------------------------------------
 
-    async def get_or_create_agent(self, task_id: str) -> Agent:
-        if task_id not in self._agents:
-            saved_state = await agent_state_store.load(task_id)
-            self._agents[task_id] = await build_agent(
-                self.workspace_dir(task_id),
-                state=saved_state,
-            )
+    async def get_or_create_agent(
+        self,
+        task_id: str,
+        model_name: str | None = None,
+        base_url: str | None = None,
+        hitl_mode: str | None = None,
+    ) -> Agent:
+        new_config = {
+            "model_name": model_name,
+            "base_url": base_url,
+            "hitl_mode": hitl_mode,
+        }
+
+        if task_id in self._agents:
+            old_config = self._agent_configs.get(task_id, {})
+            # Check if any specified setting changed from what the agent was created with
+            config_changed = False
+            for k, v in new_config.items():
+                if v is not None and v != old_config.get(k):
+                    config_changed = True
+                    break
+
+            if config_changed:
+                existing_agent = self._agents[task_id]
+                effective_model = model_name or old_config.get("model_name")
+                effective_base = base_url or old_config.get("base_url")
+                effective_hitl = hitl_mode or old_config.get("hitl_mode")
+                self._agents[task_id] = await build_agent(
+                    self.workspace_dir(task_id),
+                    state=existing_agent.state,
+                    model_name=effective_model,
+                    base_url=effective_base,
+                    hitl_mode=effective_hitl,
+                )
+                self._agent_configs[task_id] = {
+                    "model_name": effective_model,
+                    "base_url": effective_base,
+                    "hitl_mode": effective_hitl,
+                }
+            return self._agents[task_id]
+
+        saved_state = await agent_state_store.load(task_id)
+        self._agents[task_id] = await build_agent(
+            self.workspace_dir(task_id),
+            state=saved_state,
+            model_name=model_name,
+            base_url=base_url,
+            hitl_mode=hitl_mode,
+        )
+        self._agent_configs[task_id] = new_config
         return self._agents[task_id]
 
     async def save_agent_state(self, task_id: str) -> None:
@@ -342,7 +389,15 @@ class TaskManager:
         for entry in payload.get("workspaces", []):
             self._workspaces[entry["id"]] = WorkspaceRecord(**entry)
         for entry in payload.get("tasks", []):
-            self._tasks[entry["id"]] = TaskRecord(**entry)
+            self._tasks[entry["id"]] = TaskRecord(
+                id=entry["id"],
+                title=entry["title"],
+                workspace_id=entry["workspace_id"],
+                status=entry.get("status", "running"),
+                updated_at=entry.get("updated_at", now_iso()),
+                has_artifacts=entry.get("has_artifacts", False),
+                is_archived=entry.get("is_archived", False),
+            )
 
 
 task_manager = TaskManager()

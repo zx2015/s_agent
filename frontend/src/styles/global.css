@@ -2,6 +2,7 @@
   --sidebar-left-width: 260px;
   --sidebar-right-width: 380px;
   --topbar-height: 48px;
+  --color-bg-base: #ffffff;
   --color-border: #e5e6eb;
   --color-bg-subtle: #f7f8fa;
   --color-text: #1d2129;
@@ -10,6 +11,15 @@
      comfortably. #57606a keeps the same "muted/secondary" role but
      clears the WCAG AA 4.5:1 threshold for normal-size text. */
   --color-text-muted: #57606a;
+}
+
+[data-theme='dark'] {
+  --color-bg-base: #1a1b1e;
+  --color-border: #2e3035;
+  --color-bg-subtle: #25262b;
+  --color-text: #e6edf3;
+  --color-text-secondary: #9aa0a6;
+  --color-text-muted: #7e868e;
 }
 
 * {
@@ -27,4 +37,5 @@ body,
 
 body {
   color: var(--color-text);
+  background: var(--color-bg-base);
 }

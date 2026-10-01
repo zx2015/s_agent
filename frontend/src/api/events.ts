@@ -15,10 +15,17 @@ export const EVENT_NAMES = [
   'require_confirm',
   'task_renamed',
   'task_todos_changed',
+  'system_reminder',
   'done',
 ] as const
 
 export type EventName = (typeof EVENT_NAMES)[number]
+
+export interface SystemReminderData {
+  block_id: string
+  source: string
+  content: string
+}
 
 export interface ThinkingDeltaData {
   text: string

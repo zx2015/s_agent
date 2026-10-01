@@ -1,5 +1,7 @@
 # 本地知识库，不纳入版本控制
 .learnings/
+# Gemini 代理本地配置目录
+.gemini/
 
 # 本地 Claude 配置与私有 skills（用户全局 CLAUDE.md 强制要求）
 .claude/

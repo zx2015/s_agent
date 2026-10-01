@@ -176,3 +176,75 @@ async def test_delete_workspace_refuses_to_delete_the_default_workspace(manager:
     workspace_ids = {w["id"] for w in manager.list_workspaces()}
     assert "default" in workspace_ids
     assert manager.get_task(task.id) is not None
+
+
+def test_create_task_does_not_initialize_git(manager: TaskManager):
+    """Creating a task must only create a directory without running git init."""
+    task = manager.create_task("default", "无需git的任务")
+    task_dir = manager.workspace_dir(task.id)
+
+    assert task_dir.exists()
+    assert not (task_dir / ".git").exists()
+
+
+def test_archive_task_persists_across_reloads(tmp_path: Path):
+    """Archiving a task sets is_archived=True and persists to disk."""
+    m1 = TaskManager(root_dir=tmp_path)
+    task = m1.create_task("default", "待归档任务")
+    assert task.is_archived is False
+
+    updated = m1.archive_task(task.id)
+    assert updated is not None
+    assert updated.is_archived is True
+
+    # Reload from disk
+    m2 = TaskManager(root_dir=tmp_path)
+    loaded = m2.get_task(task.id)
+    assert loaded is not None
+    assert loaded.is_archived is True
+
+
+@pytest.mark.asyncio
+async def test_reset_context_clears_agent_and_redis(manager: TaskManager):
+    """reset_context removes agent from cache and deletes state from Redis."""
+    task = manager.create_task("default", "重置记忆任务")
+    fake_agent = type("FakeAgent", (), {"state": "some-state"})()
+    manager._agents[task.id] = fake_agent  # type: ignore[assignment]
+    manager._agent_configs[task.id] = {"model_name": "test-model"}
+
+    with patch.object(agent_state_store, "delete", new=AsyncMock()) as mock_delete:
+        await manager.reset_context(task.id)
+        assert task.id not in manager._agents
+        assert task.id not in manager._agent_configs
+        mock_delete.assert_awaited_once_with(task.id)
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_agent_hot_reload_on_config_change(manager: TaskManager):
+    """get_or_create_agent rebuilds the agent if model_name or hitl_mode changed."""
+    task = manager.create_task("default", "配置热切换任务")
+    
+    mock_agent_1 = type("MockAgent1", (), {"state": "state1"})()
+    mock_agent_2 = type("MockAgent2", (), {"state": "state2"})()
+
+    with patch("server.service.task_manager.build_agent", new=AsyncMock(side_effect=[mock_agent_1, mock_agent_2])) as mock_build:
+        # First call creates initial agent
+        a1 = await manager.get_or_create_agent(task.id, model_name="model-a", hitl_mode="dangerous")
+        assert a1 is mock_agent_1
+        assert mock_build.call_count == 1
+
+        # Second call with same parameters returns cached instance
+        a1_cached = await manager.get_or_create_agent(task.id, model_name="model-a", hitl_mode="dangerous")
+        assert a1_cached is mock_agent_1
+        assert mock_build.call_count == 1
+
+        # Third call with changed model triggers rebuild with previous state
+        a2 = await manager.get_or_create_agent(task.id, model_name="model-b", hitl_mode="always")
+        assert a2 is mock_agent_2
+        assert mock_build.call_count == 2
+        # Check that state was passed from a1
+        _, kwargs = mock_build.call_args
+        assert kwargs["model_name"] == "model-b"
+        assert kwargs["hitl_mode"] == "always"
+        assert kwargs["state"] == "state1"
+
