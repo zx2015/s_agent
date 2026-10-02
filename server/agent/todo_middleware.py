@@ -133,10 +133,10 @@ class TodoLifecycleMiddleware(MiddlewareBase):
                         "检测到待办列表中仍有未完成的待办任务：\n"
                         f"{task_items}\n\n"
                         "根据待办闭环公约，当前任务不能直接结束交付：\n"
-                        "1. 已完成的待办已自动清理；\n"
+                        "1. 已完成的待办已由系统自动清理归档；\n"
                         "2. 请逐项审查上述未完成待办是否依然有效且必要：\n"
                         "   - 若已无效/冗余/已不适用：请调用 TaskUpdate(task_id='...', status='deleted') 进行清理剪枝，并在回复中简要说明原因；\n"
-                        "   - 若仍然有效：严禁提前结束！必须立即调用相应工具或委派子智能体执行该待办任务，直到其完成交付！\n"
+                        "   - 若仍然有效：严禁提前结束！必须立即调用相应工具或委派子智能体执行该待办任务，完成后调用 TaskUpdate(task_id='...', status='completed') 标记完成（系统自动归档清理），直到全部交付！\n"
                         "</system-reminder>"
                     )
                     hint_block = HintBlock(hint=reminder_text)

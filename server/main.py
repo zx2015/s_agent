@@ -6,6 +6,7 @@ Endpoints mirror `docs/specs/2026-09-28-frontend-three-column-workbench.md`
 against those paths and payload shapes already.
 """
 import asyncio
+import logging
 import time
 import zipfile
 from pathlib import Path
@@ -16,12 +17,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from agentscope.event import (
     ConfirmResult,
+    ExternalExecutionResultEvent,
     ReplyEndEvent,
+    RequireExternalExecutionEvent,
     RequireUserConfirmEvent,
     ToolResultEndEvent,
     UserConfirmResultEvent,
 )
-from agentscope.message import Msg, TextBlock
+from agentscope.message import Msg, TextBlock, ToolResultBlock, ToolResultState
 
 from server import config
 from server.schemas.chat import (
@@ -46,9 +49,11 @@ from server.service.history import (
     get_paged_chat_messages,
     serialize_todos,
 )
-from server.service.memory_store import agent_state_store
+from server.service.memory_store import agent_state_store, sanitize_agent_state
 from server.service.task_manager import task_manager
 from server.service.title_generator import generate_title
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="s_agent backend")
 
@@ -282,6 +287,7 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
             while True:
                 pending_reply_id: str | None = None
                 pending_tool_calls = None
+                is_external_execution = False
 
                 async for event in agent.reply_stream(inputs):
                     if isinstance(event, RequireUserConfirmEvent):
@@ -289,6 +295,33 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                         pending_tool_calls = event.tool_calls
                         for frame in translator.translate(event):
                             await turn.broadcast(frame)
+                        break
+
+                    if isinstance(event, RequireExternalExecutionEvent):
+                        logger.warning(
+                            "收到未支持的外部工具执行请求: reply_id=%s, tools=%s",
+                            event.reply_id,
+                            [tc.name for tc in event.tool_calls],
+                        )
+                        inputs = ExternalExecutionResultEvent(
+                            reply_id=event.reply_id,
+                            execution_results=[
+                                ToolResultBlock(
+                                    id=tc.id,
+                                    name=tc.name,
+                                    output=[
+                                        TextBlock(
+                                            type="text",
+                                            text="[系统提示: 当前环境不支持外部工具执行交互，请直接在对话回复中以自然语言向用户澄清或说明]",
+                                        )
+                                    ],
+                                    state=ToolResultState.ERROR,
+                                )
+                                for tc in event.tool_calls
+                            ],
+                        )
+                        pending_reply_id = event.reply_id
+                        is_external_execution = True
                         break
 
                     # Translate the event into SSE frames. Tools that
@@ -369,6 +402,9 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     task_manager.update_task(payload.task_id, status="completed")
                     return
 
+                if is_external_execution:
+                    continue
+
                 future = task_manager.wait_for_confirm(pending_reply_id)
                 action = await future
                 inputs = UserConfirmResultEvent(
@@ -380,10 +416,14 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 )
         except asyncio.CancelledError:
             task_manager.update_task(payload.task_id, status="completed")
+            sanitize_agent_state(agent.state)
+            await task_manager.save_agent_state(payload.task_id)
             await turn.broadcast(sse_frame("done", {"task_status": "aborted"}))
             raise
         except Exception as exc:  # noqa: BLE001 - surfaced to the client
             task_manager.update_task(payload.task_id, status="failed")
+            sanitize_agent_state(agent.state)
+            await task_manager.save_agent_state(payload.task_id)
             await turn.broadcast(sse_frame("text_delta", {"text": f"\n\n[后端错误: {exc}]"}))
             await turn.broadcast(sse_frame("done", {"task_status": "failed"}))
         finally:

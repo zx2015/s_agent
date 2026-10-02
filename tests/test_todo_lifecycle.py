@@ -195,3 +195,34 @@ async def test_agent_core_factory_includes_todo_middleware(tmp_path):
         for m in getattr(agent, "_reply_middlewares", [])
     )
     assert has_todo_mw, "TodoLifecycleMiddleware must be registered in the agent's reply middlewares chain"
+
+
+@pytest.mark.asyncio
+async def test_resilient_task_update_idempotent_delete():
+    """Verify that ResilientTaskUpdate silently succeeds when deleting an already-pruned task."""
+    from server.agent.core import ResilientTaskUpdate
+    from agentscope.message import ToolResultState
+
+    tool = ResilientTaskUpdate()
+    state = AgentState()
+    # Task list is empty (e.g., tasks were already completed and pruned)
+    assert len(state.tasks_context.tasks) == 0
+
+    # Attempting to delete task "1" should succeed idempotently
+    chunk = await tool.call(
+        _agent_state=state,
+        task_id="1",
+        status="deleted",
+    )
+    assert chunk.state == ToolResultState.SUCCESS
+    assert "already completed and automatically pruned" in chunk.content[0].text
+
+    # But non-delete operations on missing tasks still report error as expected
+    chunk_err = await tool.call(
+        _agent_state=state,
+        task_id="1",
+        status="completed",
+    )
+    assert chunk_err.state == ToolResultState.ERROR
+    assert "TaskNotFoundError" in chunk_err.content[0].text
+

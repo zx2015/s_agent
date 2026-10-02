@@ -44,6 +44,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    hmr: false,
     proxy: {
       // Point this at the FastAPI backend to switch off the mock layer.
       '/api': {

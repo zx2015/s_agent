@@ -8,10 +8,16 @@ which a mock can't tell us.
 import uuid
 
 import pytest
-from agentscope.message import Msg, TextBlock
+from agentscope.message import (
+    Msg,
+    TextBlock,
+    ToolCallBlock,
+    ToolCallState,
+    ToolResultBlock,
+)
 from agentscope.state import AgentState
 
-from server.service.memory_store import AgentStateStore, _key
+from server.service.memory_store import AgentStateStore, _key, sanitize_agent_state
 from server import config
 
 
@@ -91,3 +97,91 @@ async def test_delete_removes_the_saved_state(store: AgentStateStore):
     await store.save(task_id, AgentState())
     await store.delete(task_id)
     assert await store.load(task_id) is None
+
+
+def test_sanitize_agent_state_repairs_dangling_tool_calls():
+    state = AgentState()
+    state.context.append(
+        Msg(name="user", role="user", content=[TextBlock(type="text", text="hi")]),
+    )
+    last_msg = Msg(
+        name="Assistant",
+        role="assistant",
+        content=[
+            ToolCallBlock(
+                type="tool_call",
+                id="call_1",
+                name="AskUser",
+                input="{}",
+                state=ToolCallState.SUBMITTED,
+            ),
+            ToolCallBlock(
+                type="tool_call",
+                id="call_2",
+                name="Bash",
+                input="{}",
+                state=ToolCallState.ASKING,
+            ),
+        ],
+    )
+    state.context.append(last_msg)
+
+    # Before sanitization, state reports awaiting tool calls
+    assert len(state.get_awaiting_tool_calls("Assistant")) == 2
+
+    modified = sanitize_agent_state(state)
+    assert modified is True
+
+    # After sanitization, awaiting tool calls is empty
+    assert len(state.get_awaiting_tool_calls("Assistant")) == 0
+
+    # The tool calls are marked finished and have matching tool results
+    tc1 = last_msg.get_content_blocks("tool_call")[0]
+    tc2 = last_msg.get_content_blocks("tool_call")[1]
+    assert tc1.state == ToolCallState.FINISHED
+    assert tc2.state == ToolCallState.FINISHED
+
+    results = last_msg.get_content_blocks("tool_result")
+    assert len(results) == 2
+    assert {r.id for r in results} == {"call_1", "call_2"}
+
+
+@pytest.mark.asyncio
+async def test_load_auto_heals_submitted_or_asking_tool_calls(store: AgentStateStore):
+    task_id = _unique_task_id()
+    state = AgentState()
+    state.context.append(
+        Msg(name="user", role="user", content=[TextBlock(type="text", text="分析这只股票")]),
+    )
+    state.context.append(
+        Msg(
+            name="Assistant",
+            role="assistant",
+            content=[
+                ToolCallBlock(
+                    type="tool_call",
+                    id="call_corrupt_1",
+                    name="AskUser",
+                    input="{}",
+                    state=ToolCallState.SUBMITTED,
+                ),
+            ],
+        ),
+    )
+
+    try:
+        # Save raw state with SUBMITTED tool call directly into Redis client
+        await store._client.set(_key(task_id), state.model_dump_json())
+
+        # load() should heal it automatically
+        healed_state = await store.load(task_id)
+        assert healed_state is not None
+        assert len(healed_state.get_awaiting_tool_calls("Assistant")) == 0
+
+        # And verify the healed state was persisted back to Redis
+        reloaded_raw = await store._client.get(_key(task_id))
+        reloaded_state = AgentState.model_validate_json(reloaded_raw)
+        assert len(reloaded_state.get_awaiting_tool_calls("Assistant")) == 0
+    finally:
+        await store.delete(task_id)
+

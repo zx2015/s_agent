@@ -28,10 +28,12 @@ from agentscope.permission import (
     PermissionMode,
     PermissionRule,
 )
+from typing import Literal
+
 from agentscope.state import AgentState
 from agentscope.workspace import LocalWorkspace
+from agentscope.message import TextBlock, ToolResultState
 from agentscope.tool import (
-    AskUser,
     Edit,
     LocalBackend,
     Read,
@@ -40,10 +42,65 @@ from agentscope.tool import (
     TaskList,
     TaskUpdate,
     ToolBase,
+    ToolChunk,
     Toolkit,
     Write,
     FunctionTool,
 )
+
+
+class ResilientTaskUpdate(TaskUpdate):
+    """具有幂等容错能力的待办更新工具。
+
+    当任务已由生命周期中间件自动修剪归档后，若模型因上下文惯性再次调用 status='deleted'，
+    静默以幂等成功处理，避免抛出 TaskNotFoundError 导致流程异常并在界面显示报错。
+    """
+
+    async def call(
+        self,
+        _agent_state: AgentState,
+        task_id: str,
+        subject: str | None = None,
+        description: str | None = None,
+        add_blocks: list[str] | None = None,
+        status: Literal["pending", "completed", "in_progress", "deleted"]
+        | None = None,
+        add_blocked_by: list[str] | None = None,
+        owner: str | None = None,
+        metadata: dict | None = None,
+    ) -> ToolChunk:
+        res = await super().call(
+            _agent_state=_agent_state,
+            task_id=task_id,
+            subject=subject,
+            description=description,
+            add_blocks=add_blocks,
+            status=status,
+            add_blocked_by=add_blocked_by,
+            owner=owner,
+            metadata=metadata,
+        )
+        if (
+            status == "deleted"
+            and res.state == ToolResultState.ERROR
+            and any(
+                "TaskNotFoundError" in getattr(block, "text", "")
+                for block in res.content
+            )
+        ):
+            logger.info(
+                "ResilientTaskUpdate: task_id=%s was already pruned/deleted, returning idempotent success",
+                task_id,
+            )
+            return ToolChunk(
+                content=[
+                    TextBlock(
+                        text=f"Task (id={task_id}) was already completed and automatically pruned from active todos.",
+                    ),
+                ],
+                state=ToolResultState.SUCCESS,
+            )
+        return res
 
 from server import config
 from server.agent.calibrator import resolve_context_size
@@ -95,16 +152,17 @@ SYSTEM_PROMPT_TEMPLATE = (
     "1. **第一步：大纲规划与维基查阅**：调用 TaskCreate 创建清晰的分析任务大纲与待办清单；先调用 wiki_query('标的/行业') 查看当前工作区是否已有现成维基资产；\n"
     "2. **第二步：按需动态委派与执行**：根据大纲，分别调用 delegate_task 委派垂直子智能体（如先派调研专家获取行业与业务情报，再派财务建模专家获取行情与精算财务比率）或调用工具逐步推进；"
     "启动时将状态置为 in_progress；\n"
-    "3. **第三步：待办完成即清理（核心准则）**：一个子任务/待办完成后，必须将产出物落盘，并**立即清理该已完成待办**（调用 TaskUpdate(task_id=..., status='deleted') 将其清理移除），保持看板清爽聚焦；\n"
+    "3. **第三步：待办完成即闭环（核心准则）**：一个子任务/待办完成后，必须将产出物落盘，并**调用 TaskUpdate(task_id=..., status='completed') 标记为已完成**。"
+    "系统后台已接入待办生命周期自动化管理，会将已完成待办自动从活动看板中归档清理，**切勿**重复调用 status='deleted'，避免产生任务不存在的误报；\n"
     "4. **第四步：未完成待办有效性审查与闭环执行（严禁提前收尾交差）**：\n"
     "   - 在准备向用户作最终汇报前，必须调用 TaskList() 检查待办清单；\n"
     "   - 若发现仍有未完成待办（pending 或 in_progress）：\n"
     "     • 逐项审查未完成待办是否依然有效且必要；\n"
-    "     • 若无效/冗余/已被替代：调用 TaskUpdate(task_id=..., status='deleted') 予以剪枝清理，并在总结中简要向用户陈述剪枝理由；\n"
-    "     • 若仍然有效：**严禁提前结束！** 必须继续调用工具或委派子智能体执行该待办任务，直到其真正完成并产出成果！\n"
-    "5. **第五步：全量完工交付**：待所有有效待办均完成并清理后，统筹汇交成果，按照【自适应交付物命名规范】调用 Write 落盘专业研报，并在对话中向用户呈现精炼结论与交付物索引。\n\n"
+    "     • 仅当待办被证明无效/冗余/已被替代时：才调用 TaskUpdate(task_id=..., status='deleted') 予以剪枝清理，并在总结中简要向用户陈述剪枝理由；\n"
+    "     • 若仍然有效：**严禁提前结束！** 必须继续调用工具或委派子智能体执行该待办任务，直到其真正完成并置为 completed！\n"
+    "5. **第五步：全量完工交付**：待所有有效待办均已完成（或确认剪枝）且活动看板清空后，统筹汇交成果，按照【自适应交付物命名规范】调用 Write 落盘专业研报，并在对话中向用户呈现精炼结论与交付物索引。\n\n"
     "【待办生命周期与完工闭环公约（必须严格遵守）】\n"
-    "- **已完成待办清理**：任务或子任务完成后，务必清理已完成待办，避免堆积；\n"
+    "- **已完成待办归档**：任务或子任务完成后，只需调用 TaskUpdate 将其置为 completed，系统自动接管清理；\n"
     "- **未完成待办审查与闭环**：只要待办列表中存在未完成任务，必须评估其有效性：有效任务必须坚决完成，无效任务方可剪枝清理；绝对不允许忽视未完成待办而草草收工。\n\n"
     "【自适应交付物命名规范（必须严格遵守）】\n"
     "- 必须根据用户具体提问与任务主题自适应命名交付文件，**绝不能死板固定**为某一个名字！\n"
@@ -116,7 +174,7 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- 写入工作区的文件会自动出现在用户界面右侧的「产物/预览」面板中供用户在线预览。\n\n"
     "【排版与交互准则】\n"
     "- 在对话气泡中输出的所有文本都会以 GitHub 风格 Markdown 渲染展示，请规范排版——用表格呈现对比数据、用加粗标明核心事实与推论；\n"
-    "- 遇到多意图或歧义需求时，可调用 AskUser 向用户澄清。\n\n"
+    "- 遇到多意图或歧义需求时，可直接在对话回复中向用户提出问题进行澄清。\n\n"
     "【权限与运行时提示】\n"
     "- 如果一次工具调用被拒绝，代表用户主动拒绝了该操作，请调整思路或更换方案，说明被拒绝操作的影响，不要在没有新信息的情况下直接重试同一个命令。\n"
     "- 对话消息与工具结果中出现的 <system-reminder> 标签，是运行框架自动注入的运行时提示（例如当前时间、待办任务状态等），并非用户本人发出的内容。\n"
@@ -240,16 +298,13 @@ async def build_agent(
     await toolkit.add_tool(TaskCreate())
     await toolkit.add_tool(TaskGet())
     await toolkit.add_tool(TaskList())
-    await toolkit.add_tool(TaskUpdate())
+    await toolkit.add_tool(ResilientTaskUpdate())
 
     # 交付物读写与文件管理 (Delivery Tools)
     await toolkit.add_tool(Read(backend=backend))
     await toolkit.add_tool(Write(backend=backend))
     await toolkit.add_tool(Edit(backend=backend))
     await toolkit.add_tool(WorkspaceGlob(workspace_dir=workspace_dir, backend=backend))
-
-    # 人机交互澄清工具
-    await toolkit.add_tool(AskUser())
 
     # 当前工作区投研维基高层查阅工具
     await toolkit.add_tool(

@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from agentscope.event import ReplyEndEvent, TextBlockDeltaEvent
+from agentscope.event import (
+    ExternalExecutionResultEvent,
+    ReplyEndEvent,
+    RequireExternalExecutionEvent,
+    TextBlockDeltaEvent,
+)
+from agentscope.message import ToolCallBlock
 from server.main import app, task_manager
 
 
@@ -194,4 +200,56 @@ async def test_get_task_messages_pagination():
                 assert data_old["messages"][-1]["id"] == "page_msg_4"
     finally:
         await task_manager.delete_workspace(ws.id)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_handles_require_external_execution_event():
+    task = task_manager.create_task("default", "外部执行测试")
+
+    class FakeAgent:
+        def __init__(self):
+            self.state = type("State", (), {"tasks_context": None, "context": []})()
+            self.call_count = 0
+
+        async def reply_stream(self, inputs):
+            self.call_count += 1
+            if self.call_count == 1:
+                # First iteration yields RequireExternalExecutionEvent
+                yield RequireExternalExecutionEvent(
+                    reply_id="r_ext",
+                    tool_calls=[
+                        ToolCallBlock(
+                            type="tool_call",
+                            id="tc_ext_1",
+                            name="AskUser",
+                            input="{}",
+                        )
+                    ],
+                )
+            else:
+                # Second iteration receives ExternalExecutionResultEvent
+                assert isinstance(inputs, ExternalExecutionResultEvent)
+                assert len(inputs.execution_results) == 1
+                assert inputs.execution_results[0].id == "tc_ext_1"
+                yield TextBlockDeltaEvent(reply_id="r_ext", block_id="b_ext", delta="已处理外部工具回调")
+                yield ReplyEndEvent(reply_id="r_ext", session_id="s_ext")
+
+    fake_agent = FakeAgent()
+
+    with patch.object(task_manager, "get_or_create_agent", new=AsyncMock(return_value=fake_agent)):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            frames: list[str] = []
+            async with client.stream(
+                "POST",
+                "/api/chat",
+                json={"task_id": task.id, "message": "测试"},
+            ) as response:
+                assert response.status_code == 200
+                async for chunk in response.aiter_text():
+                    frames.append(chunk)
+
+            full_body = "".join(frames)
+            assert "已处理外部工具回调" in full_body
+            assert "event: done" in full_body
+
 
