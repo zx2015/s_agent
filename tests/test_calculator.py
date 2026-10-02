@@ -66,3 +66,34 @@ def test_calculator_direct_error_handling():
     res2 = calculate("pct_change(0, 10)")
     assert "计算失败" in res2
     assert "基数 old 不能为零" in res2
+
+
+def test_calculate_compound_dict_expression():
+    expr = (
+        "{'name': '海康威视', "
+        "'cost_prot': round(31.025 * 0.9, 2), "
+        "'deep_stop': round(32.46 * 0.85, 2), "
+        "'tp1': round(32.46 * 1.15, 2), "
+        "'tp2': round(32.46 * 1.3, 2)}"
+    )
+    result = calculate(expr)
+    assert "海康威视" in result
+    assert "27.92" in result  # round(31.025 * 0.9, 2)
+    assert "27.59" in result  # round(32.46 * 0.85, 2)
+    assert "37.33" in result  # round(32.46 * 1.15, 2)
+    assert "42.2" in result or "42.20" in result   # round(32.46 * 1.3, 2)
+
+
+def test_calculate_list_of_dicts_and_sets():
+    expr = "[{'code': '002415', 'target': round(32.46 * 1.15, 2)}, {'code': '000001', 'target': round(10.5 * 1.2, 2)}]"
+    result = calculate(expr)
+    assert "002415" in result
+    assert "37.33" in result
+    assert "000001" in result
+    assert "12.6" in result
+
+    # Test set
+    set_expr = "{round(1.234, 1), round(2.567, 1)}"
+    set_result = calculate(set_expr)
+    assert "1.2" in set_result
+    assert "2.6" in set_result

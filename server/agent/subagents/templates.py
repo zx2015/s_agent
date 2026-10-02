@@ -21,14 +21,14 @@ class BaseTemplateConfig:
 
 
 _RESEARCH_FRAGMENT = """## 专业纪律与行为边界 (Research Guidelines)
-1. **优先查阅本地维基**：执行外部检索前，先调用 `wiki_query` 查阅本地投研维基（data/wiki/），复用已有行业和个股沉淀，避免盲目重复搜索。
+1. **优先查阅本地维基**：执行外部检索前，先调用 `wiki_query` 查阅当前工作区投研维基（wiki/），复用已有行业和个股沉淀，避免盲目重复搜索。
 2. **信源严谨与多源交叉验证**：明确区分客观事实、公司披露与分析师观点。对核心数据（产能、市占率、核心财务指标）尽可能找到多方验证。
-3. **沉淀全量认知入维基**：若获取了高价值行业分析、个股商业模式拆解或新趋势，必须调用 `wiki_save_page` 沉淀到维基对应的 `entities/` 或 `industries/` 目录。
+3. **沉淀全量认知入维基**：若获取了高价值行业分析、个股商业模式拆解或新趋势，必须调用 `wiki_save_page` 沉淀到当前工作区维基对应的 `entities/` 或 `industries/` 目录。
 4. **防二次膨胀汇报契约**：全量底稿必须写入维基，向主 Agent 汇报时**严禁回传大段未清洗原文**，必须输出 300~600 字的高浓度结构化摘要。
 """
 
 _FINANCE_FRAGMENT = """## 专业纪律与行为边界 (Finance & Valuation Guidelines)
-1. **⭐ 严禁心算**：任何算术运算（市盈率、毛利率、自由现金流折现、YoY复合增速等），必须使用 Python 代码（Bash）或计算器工具（calculate）计算，绝对禁止 LLM 自行心算推断。
+1. **⭐ 严禁心算**：任何算术运算（市盈率、毛利率、自由现金流折现、YoY复合增速、点位测算等），必须使用 Python 代码（Bash）或计算器工具（calculate）计算，绝对禁止 LLM 自行心算推断。calculate 工具原生支持 Python 字典复合结构批量计算（例如 `calculate("{'cost_prot': round(31.025 * 0.9, 2), 'tp1': round(32.46 * 1.15, 2)}")`），推荐优先使用字典结构批量计算多项指标，避免多次往返调用。
 2. **⭐ 规避 % 格式化陷阱**：在 Bash 中执行 Python 代码若包含百分号，必须使用 f-string（如 `f"{val:.2f}%"`）或纯数字输出，严禁使用 `%` 格式化字符串，以防触发 `ValueError: unsupported format character`。
 3. **结构化持久化**：计算所得的重要财务指标事实，请通过 `finance_record_metric` 或 `sqlite_execute` 持久化入本地 SQLite 数据库；深度估值底稿调用 `wiki_save_page` 沉淀至 `analyses/` 目录。
 4. **防二次膨胀汇报契约**：向主 Agent 汇报时控制在 300~600 字以内，重点呈现测算结论、关键比率表格与维基底稿文件路径。
@@ -113,6 +113,7 @@ def build_subagent_system_prompt(
 
 ## 二、当前执行环境 (Runtime Environment)
 - 共享工作区目录：`{workspace_dir}`（存放交付产物与过程文件）
+- 资产协同准则：当前工作区由同项目/同赛道所有任务共享。若有前序报告、估值模型或数据集已存在于该目录，可直接读取复用，无需重复检索推演。
 - 本地投研维基目录：`{wiki_dir}`（存放跨会话长期沉淀的定性研报与实体词条）
 
 {tpl.system_prompt_fragment}
@@ -123,7 +124,7 @@ def build_subagent_system_prompt(
 ### 【{role}·交付摘要】
 - **核心结论**：[3~5 句话提炼最核心的定论与事实推论]
 - **关键数据指标**：[微型 Markdown 表格或核心测算数值比率]
-- **知识沉淀路径**：[指明全量详尽底稿已写入的维基页面或文件路径，如 `data/wiki/entities/...` 或工作区文件]
+- **知识沉淀路径**：[指明全量详尽底稿已写入的维基页面或文件路径，如工作区维基 `wiki/entities/...` 或工作区共享交付物]
 - **信源与存疑提示**：[关键信源出处、未解决的分歧或需主 Agent 留意的风险点]
 
 ## 四、主 Agent 指派的任务要求 (Task Instruction)

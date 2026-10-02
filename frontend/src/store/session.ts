@@ -35,6 +35,9 @@ export interface TaskSessionState {
   pendingConfirm: PendingConfirm | null
   turnOpen: boolean
   insideThink: boolean
+  hasMoreHistory: boolean
+  isLoadingMoreHistory: boolean
+  totalHistoryCount: number
 }
 
 function createInitialSession(): TaskSessionState {
@@ -44,6 +47,9 @@ function createInitialSession(): TaskSessionState {
     pendingConfirm: null,
     turnOpen: false,
     insideThink: false,
+    hasMoreHistory: false,
+    isLoadingMoreHistory: false,
+    totalHistoryCount: 0,
   }
 }
 
@@ -99,6 +105,28 @@ export const useSessionStore = defineStore('session', () => {
     const last = msgs[msgs.length - 1]
     return last && last.role === 'assistant' && last.streaming ? last : null
   })
+
+  const hasMoreHistory = computed<boolean>({
+    get: () => getActiveSession().hasMoreHistory,
+    set: (val: boolean) => {
+      getActiveSession().hasMoreHistory = val
+    },
+  })
+  const isLoadingMoreHistory = computed<boolean>({
+    get: () => getActiveSession().isLoadingMoreHistory,
+    set: (val: boolean) => {
+      getActiveSession().isLoadingMoreHistory = val
+    },
+  })
+  const totalHistoryCount = computed<number>({
+    get: () => getActiveSession().totalHistoryCount,
+    set: (val: number) => {
+      getActiveSession().totalHistoryCount = val
+    },
+  })
+  const remainingHistoryCount = computed<number>(() =>
+    Math.max(0, totalHistoryCount.value - messages.value.length),
+  )
 
   function switchToTask(taskId: string): void {
     currentTaskId.value = taskId
@@ -332,7 +360,7 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * Hydrate the middle pane from the backend transcript for a task.
    */
-  async function loadHistory(taskId: string): Promise<void> {
+  async function loadHistory(taskId: string, limit = 30): Promise<void> {
     currentTaskId.value = taskId
     const s = ensureSession(taskId)
     s.pendingConfirm = null
@@ -344,18 +372,57 @@ export const useSessionStore = defineStore('session', () => {
     }
     try {
       const [msgResponse] = await Promise.all([
-        apiClient.get<{ messages: ChatMessage[] }>(
-          `/api/tasks/${taskId}/messages`,
+        apiClient.get<{ messages: ChatMessage[]; has_more?: boolean; total?: number }>(
+          `/api/tasks/${taskId}/messages?limit=${limit}`,
         ),
         loadArtifacts(taskId),
       ])
       if (!s.turnOpen) {
         s.messages = msgResponse.messages ?? []
+        s.hasMoreHistory = Boolean(msgResponse.has_more)
+        s.totalHistoryCount =
+          typeof msgResponse.total === 'number' ? msgResponse.total : s.messages.length
       }
     } catch {
       if (!s.turnOpen) {
         s.messages = []
+        s.hasMoreHistory = false
+        s.totalHistoryCount = 0
       }
+    }
+  }
+
+  /**
+   * Load an earlier page of messages before the earliest currently rendered message.
+   */
+  async function loadMoreHistory(targetTaskId?: string, limit = 30): Promise<boolean> {
+    const taskId = resolveTaskId(targetTaskId)
+    const s = ensureSession(taskId)
+    if (!s.hasMoreHistory || s.isLoadingMoreHistory || s.messages.length === 0) {
+      return false
+    }
+
+    const firstMsgId = s.messages[0]?.id
+    if (!firstMsgId) return false
+
+    s.isLoadingMoreHistory = true
+    try {
+      const resp = await apiClient.get<{ messages: ChatMessage[]; has_more?: boolean; total?: number }>(
+        `/api/tasks/${taskId}/messages?limit=${limit}&before_id=${encodeURIComponent(firstMsgId)}`,
+      )
+      const olderMessages = resp.messages ?? []
+      if (olderMessages.length > 0) {
+        s.messages = [...olderMessages, ...s.messages]
+      }
+      s.hasMoreHistory = Boolean(resp.has_more)
+      if (typeof resp.total === 'number') {
+        s.totalHistoryCount = resp.total
+      }
+      return olderMessages.length > 0
+    } catch {
+      return false
+    } finally {
+      s.isLoadingMoreHistory = false
     }
   }
 
@@ -365,6 +432,10 @@ export const useSessionStore = defineStore('session', () => {
     pendingConfirm,
     isStreaming,
     currentAssistant,
+    hasMoreHistory,
+    isLoadingMoreHistory,
+    totalHistoryCount,
+    remainingHistoryCount,
     switchToTask,
     hasMessages,
     isTaskStreaming,
@@ -374,6 +445,7 @@ export const useSessionStore = defineStore('session', () => {
     resolveConfirm,
     reset,
     loadHistory,
+    loadMoreHistory,
     loadArtifacts,
   }
 })

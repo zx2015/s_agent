@@ -42,9 +42,9 @@ async def test_build_agent_respects_disabled_flag(tmp_path: Path, monkeypatch: p
     mem_dir = tmp_path / "shared_memory"
 
     agent = await build_agent(workspace, memory_dir=mem_dir)
-    assert len(agent._system_prompt_middlewares) == 0
-    assert len(agent._reply_middlewares) == 0
-    assert len(agent._reasoning_middlewares) == 0
+    assert not any(isinstance(mw, AgenticMemoryMiddleware) for mw in agent._system_prompt_middlewares)
+    assert not any(isinstance(mw, AgenticMemoryMiddleware) for mw in agent._reply_middlewares)
+    assert not any(isinstance(mw, AgenticMemoryMiddleware) for mw in agent._reasoning_middlewares)
 
 
 @pytest.mark.asyncio

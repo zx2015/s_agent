@@ -33,7 +33,6 @@ from agentscope.workspace import LocalWorkspace
 from agentscope.tool import (
     AskUser,
     Edit,
-    Glob,
     LocalBackend,
     Read,
     TaskCreate,
@@ -48,8 +47,10 @@ from agentscope.tool import (
 
 from server import config
 from server.agent.calibrator import resolve_context_size
+from server.agent.todo_middleware import TodoLifecycleMiddleware
+from server.agent.tools_glob import WorkspaceGlob
 from server.agent.tools_subagent import create_delegate_task_tool
-from server.agent.tools_wiki import wiki_query, wiki_read
+from server.agent.tools_wiki import create_wiki_tools, wiki_query, wiki_read
 from server.tools.calculator import calculate
 from server.tools.mcp import build_mcp_clients, parse_mcp_servers
 
@@ -66,30 +67,45 @@ SYSTEM_PROMPT_TEMPLATE = (
     "你的工作区目录是：\n"
     "{workspace_dir}\n"
     "所有最终交付的投研报告、代码与分析文件都必须保存在该工作区目录下。\n\n"
+    "【工作区共享资产协同公约（重要）】\n"
+    "1. 本工作区目录是同项目/同赛道下所有任务的【公共资产共享池】；\n"
+    "2. 同一工作区下生成的全部交付物（历史分析报告、财务模型底稿、Excel/CSV 数据、图表）均保存在该工作区根目录下；\n"
+    "3. 在启动新分析任务前，先通过文件工具（如 Read）查阅当前工作区内已有的文件资产；\n"
+    "4. 若发现已有相关标的或竞品的分析报告，应直接复用其核心数据、估值假设与定性结论，形成协同递进的研究产出，避免重复计算与孤立推演。\n\n"
     "【核心使命与架构职责（重要）】\n"
     "1. **大局统筹与顶层规划**：你专注于用户意图剖析、报告框架设计、任务拆解与最终综合交付；\n"
     "2. **⭐ 严禁越俎代庖（动态委派机制）**：你本身不直接进行底层信息检索、网页抓取、实时行情查询或 Python 复杂运算！"
     "所有垂直专业子任务，必须通过调用 `delegate_task` 工具动态委派给具有专属角色与独立沙箱的子智能体（Sub-Agent）完成；\n"
-    "3. **认知查阅与沉淀**：你可通过 `wiki_query` 和 `wiki_read` 查阅本地投研维基（data/wiki/）已有成果；子智能体产出的深度底稿也会自动沉淀在维基中；\n"
-    "4. **综合研报起草与落盘交付**：汇总各子智能体的高密度汇报底稿后，你负责统揽全局，消除分歧，撰写详尽完备的最终报告，并通过 Write 工具落盘到工作区。\n\n"
+    "3. **认知查阅与沉淀**：你可通过 `wiki_query` 和 `wiki_read` 查阅当前工作区本地投研维基（wiki/）已有成果；子智能体产出的深度底稿也会自动沉淀在维基中；\n"
+    "4. **综合研报起草与落盘交付**：汇总各子智能体的高密度汇报底稿后，你负责统揽全局，消除分歧，撰写详尽完备的最终报告，并通过 Write 工具落盘到工作区；\n"
+    "5. **快速复算与指标验证**：如需进行公式计算或多指标结构化复验，可直接调用 `calculate` 工具（支持单式与字典结构批量计算，如 `calculate(\"{{'tp1': round(32.46*1.15, 2), 'tp2': round(32.46*1.3, 2)}}\")`），严禁心算。\n\n"
     "【动态子智能体委派规范 (delegate_task)】\n"
     "- **调研与资料搜集**：委派行业/公司调研专家（base_template='research'，allowed_tools=['web_search', 'wiki_tools', 'file_io']），"
-    "负责全网搜索最新研报、行业周期数据，并自动将核心认知编译沉淀至 data/wiki/；\n"
+    "负责全网搜索最新研报、行业周期数据，并自动将核心认知编译沉淀至当前工作区 wiki/；\n"
     "- **财务建模与量化计算**：委派财务精算与估值建模师（base_template='finance'，allowed_tools=['stock_market', 'python_calc', 'finance_db', 'wiki_tools']），"
     "负责查询行情、拉取历史K线、运行 Python 进行三张表与DCF精准计算、将事实底稿录入 SQLite/维基，绝对避免心算；\n"
     "- **红队批判审阅**：委派审慎风控审查员（base_template='reviewer'，allowed_tools=['file_io', 'wiki_tools']），"
     "负责逆向审视商业模式漏洞、商誉应收风险与极端敏感性；\n"
     "- **通用专项任务**：委派通用执行员（base_template='general'，allowed_tools=['python_calc', 'file_io', 'wiki_tools']）；\n"
-    "- **子智能体汇报契约**：子智能体会将全量详尽底稿写入本地维基，向你汇报时仅提供 300~600 字高密度 4 段式摘要（核心结论、关键指标表、维基底稿路径、存疑提示）。"
+    "- **子智能体汇报契约**：子智能体会将全量详尽底稿写入当前工作区维基，向你汇报时仅提供 300~600 字高密度 4 段式摘要（核心结论、关键指标表、维基底稿路径、存疑提示）。"
     "如需查阅特定完整细节，你可调用 wiki_read 查阅；\n"
     "- **委派异常与超时自愈（重要）**：若子智能体返回了超时告警或中断提示，代表该垂直子任务因检索量大超出了时限，这**绝非**用户主动拒绝操作！"
-    "子智能体通常在超时前已将大部分底稿落盘到本地维基（data/wiki/），你应优先调用 wiki_query / wiki_read 查验已生成内容，或缩小问题粒度重试，不可误当成人工拒绝操作。\n\n"
-    "【四步标准协同 SOP】\n"
-    "1. **第一步：大纲规划与维基查阅**：调用 TaskCreate 创建清晰的分析任务大纲；先调用 wiki_query('标的/行业') 查看本地是否已有现成维基资产；\n"
-    "2. **第二步：按需动态委派**：根据大纲，分别调用 delegate_task 委派垂直子智能体（如先派调研专家获取行业与业务情报，再派财务建模专家获取行情与精算财务比率）；"
-    "每步启动与结束时调用 TaskUpdate 保持进度看板同步；\n"
-    "3. **第三步：综合研报起草与自适应落盘**：统筹各子智能体汇交的事实底稿，按照【自适应交付物命名规范】调用 Write 工具生成专业研报；\n"
-    "4. **第四步：完工同步**：调用 TaskUpdate 将所有任务置为 completed，并在对话中向用户呈现精炼结论与交付物索引。\n\n"
+    "子智能体通常在超时前已将大部分底稿落盘到当前工作区维基（wiki/），你应优先调用 wiki_query / wiki_read 查验已生成内容，或缩小问题粒度重试，不可误当成人工拒绝操作。\n\n"
+    "【标准协同与待办生命周期闭环 SOP】\n"
+    "1. **第一步：大纲规划与维基查阅**：调用 TaskCreate 创建清晰的分析任务大纲与待办清单；先调用 wiki_query('标的/行业') 查看当前工作区是否已有现成维基资产；\n"
+    "2. **第二步：按需动态委派与执行**：根据大纲，分别调用 delegate_task 委派垂直子智能体（如先派调研专家获取行业与业务情报，再派财务建模专家获取行情与精算财务比率）或调用工具逐步推进；"
+    "启动时将状态置为 in_progress；\n"
+    "3. **第三步：待办完成即清理（核心准则）**：一个子任务/待办完成后，必须将产出物落盘，并**立即清理该已完成待办**（调用 TaskUpdate(task_id=..., status='deleted') 将其清理移除），保持看板清爽聚焦；\n"
+    "4. **第四步：未完成待办有效性审查与闭环执行（严禁提前收尾交差）**：\n"
+    "   - 在准备向用户作最终汇报前，必须调用 TaskList() 检查待办清单；\n"
+    "   - 若发现仍有未完成待办（pending 或 in_progress）：\n"
+    "     • 逐项审查未完成待办是否依然有效且必要；\n"
+    "     • 若无效/冗余/已被替代：调用 TaskUpdate(task_id=..., status='deleted') 予以剪枝清理，并在总结中简要向用户陈述剪枝理由；\n"
+    "     • 若仍然有效：**严禁提前结束！** 必须继续调用工具或委派子智能体执行该待办任务，直到其真正完成并产出成果！\n"
+    "5. **第五步：全量完工交付**：待所有有效待办均完成并清理后，统筹汇交成果，按照【自适应交付物命名规范】调用 Write 落盘专业研报，并在对话中向用户呈现精炼结论与交付物索引。\n\n"
+    "【待办生命周期与完工闭环公约（必须严格遵守）】\n"
+    "- **已完成待办清理**：任务或子任务完成后，务必清理已完成待办，避免堆积；\n"
+    "- **未完成待办审查与闭环**：只要待办列表中存在未完成任务，必须评估其有效性：有效任务必须坚决完成，无效任务方可剪枝清理；绝对不允许忽视未完成待办而草草收工。\n\n"
     "【自适应交付物命名规范（必须严格遵守）】\n"
     "- 必须根据用户具体提问与任务主题自适应命名交付文件，**绝不能死板固定**为某一个名字！\n"
     "- 命名范式：\n"
@@ -182,6 +198,10 @@ async def build_agent(
     """
     workspace_dir.mkdir(parents=True, exist_ok=True)
     resolved_dir = str(workspace_dir.resolve())
+    workspace_wiki_dir = (workspace_dir / "wiki").resolve()
+    workspace_wiki_dir.mkdir(parents=True, exist_ok=True)
+    wiki_path_str = str(workspace_wiki_dir)
+    wiki_tools = create_wiki_tools(workspace_wiki_dir)
     backend = LocalBackend()
 
     effective_model = model_name or config.MODEL_NAME
@@ -226,27 +246,27 @@ async def build_agent(
     await toolkit.add_tool(Read(backend=backend))
     await toolkit.add_tool(Write(backend=backend))
     await toolkit.add_tool(Edit(backend=backend))
-    await toolkit.add_tool(Glob(backend=backend))
+    await toolkit.add_tool(WorkspaceGlob(workspace_dir=workspace_dir, backend=backend))
 
     # 人机交互澄清工具
     await toolkit.add_tool(AskUser())
 
-    # 本地投研维基高层查阅工具
+    # 当前工作区投研维基高层查阅工具
     await toolkit.add_tool(
         FunctionTool(
-            wiki_query,
+            wiki_tools["wiki_query"],
             permission=PermissionDecision(
                 behavior=PermissionBehavior.ALLOW,
-                message="检索本地投研维基索引",
+                message="检索当前工作区投研维基索引",
             ),
         ),
     )
     await toolkit.add_tool(
         FunctionTool(
-            wiki_read,
+            wiki_tools["wiki_read"],
             permission=PermissionDecision(
                 behavior=PermissionBehavior.ALLOW,
-                message="查阅本地投研维基页面",
+                message="查阅当前工作区投研维基页面",
             ),
         ),
     )
@@ -326,6 +346,10 @@ async def build_agent(
         )
         middlewares.append(memory_middleware)
 
+    # 待办任务生命周期与完工闭环守护中间件
+    todo_middleware = TodoLifecycleMiddleware(max_checks=2)
+    middlewares.append(todo_middleware)
+
     agent = Agent(
         name="Assistant",
         system_prompt=SYSTEM_PROMPT_TEMPLATE.format(
@@ -341,7 +365,6 @@ async def build_agent(
     )
 
     # 4. 权限与 HITL 安全配置
-    wiki_path_str = str(Path(config.WIKI_DIR).resolve())
     if effective_hitl_mode == "never":
         agent._engine.context.mode = PermissionMode.BYPASS
     elif effective_hitl_mode == "always":
@@ -410,7 +433,7 @@ async def build_agent(
             agent._engine.add_rule(
                 PermissionRule(
                     tool_name=fs_tool,
-                    rule_content="data/wiki/**",
+                    rule_content="wiki/**",
                     behavior=PermissionBehavior.ALLOW,
                     source="systemDefault",
                 ),

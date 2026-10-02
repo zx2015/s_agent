@@ -53,10 +53,16 @@ async def test_delete_task_returns_false_for_an_unknown_task(manager: TaskManage
 
 
 @pytest.mark.asyncio
-async def test_delete_task_removes_metadata_agent_state_and_workspace(manager: TaskManager):
+async def test_delete_task_removes_metadata_agent_state_and_private_dir_preserving_workspace(manager: TaskManager):
     task = manager.create_task("default", "待删除的测试任务")
     workspace_dir = manager.workspace_dir(task.id)
+    private_dir = manager.task_private_dir(task.id)
     assert workspace_dir.exists()
+    assert private_dir.exists()
+
+    # Create a shared deliverable in the workspace
+    artifact_file = workspace_dir / "analysis.md"
+    artifact_file.write_text("# 成果报告")
 
     # Populate an in-memory agent placeholder and a Redis-persisted state
     # so the test proves both actually get cleaned up, not just metadata.
@@ -70,7 +76,10 @@ async def test_delete_task_removes_metadata_agent_state_and_workspace(manager: T
     assert deleted is True
     assert manager.get_task(task.id) is None
     assert task.id not in manager._agents
-    assert not workspace_dir.exists()
+    assert not private_dir.exists()
+    # Workspace directory and shared deliverables MUST be preserved
+    assert workspace_dir.exists()
+    assert artifact_file.exists()
     assert await agent_state_store.load(task.id) is None
 
 
@@ -78,6 +87,8 @@ async def test_delete_task_removes_metadata_agent_state_and_workspace(manager: T
 async def test_delete_task_swallows_redis_failures(manager: TaskManager):
     """A Redis hiccup during delete must not stop metadata/file cleanup."""
     task = manager.create_task("default", "redis失败时也要删除的任务")
+    private_dir = manager.task_private_dir(task.id)
+    assert private_dir.exists()
 
     with patch(
         "server.service.task_manager.agent_state_store.delete",
@@ -87,7 +98,67 @@ async def test_delete_task_swallows_redis_failures(manager: TaskManager):
 
     assert deleted is True
     assert manager.get_task(task.id) is None
-    assert not manager.workspace_dir(task.id).exists()
+    assert not private_dir.exists()
+
+
+def test_tasks_in_same_workspace_share_directory(manager: TaskManager):
+    ws = manager.create_workspace("投研专区")
+    t1 = manager.create_task(ws.id, "标的A分析")
+    t2 = manager.create_task(ws.id, "标的B分析")
+
+    # Both tasks point to the same physical workspace directory
+    assert manager.workspace_dir(t1.id) == manager.workspace_dir(t2.id)
+    assert manager.workspace_dir(t1.id) == manager.get_workspace_dir(ws.id)
+
+    # Task 1 writes a file, Task 2 can immediately access it
+    shared_file = manager.workspace_dir(t1.id) / "标的A_深度报告.md"
+    shared_file.write_text("标的A盈利预测数据", encoding="utf-8")
+
+    assert (manager.workspace_dir(t2.id) / "标的A_深度报告.md").exists()
+    assert (manager.workspace_dir(t2.id) / "标的A_深度报告.md").read_text(encoding="utf-8") == "标的A盈利预测数据"
+
+
+def test_migrate_legacy_workspaces(tmp_path: Path):
+    """Legacy per-task directories should be automatically migrated into shared workspace directories."""
+    legacy_task_id = "task-legacy-123"
+    legacy_dir = tmp_path / legacy_task_id
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "伊利股份_深度分析.md").write_text("伊利报告内容", encoding="utf-8")
+    legacy_sessions = legacy_dir / "sessions"
+    legacy_sessions.mkdir()
+    (legacy_sessions / "session-1.log").write_text("subagent log", encoding="utf-8")
+
+    # Set up registry containing this legacy task
+    reg_file = tmp_path / "registry.json"
+    import json
+    reg_file.write_text(json.dumps({
+        "workspaces": [{"id": "default", "name": "默认工作区"}],
+        "tasks": [{
+            "id": legacy_task_id,
+            "title": "旧版任务",
+            "workspace_id": "default",
+            "status": "completed",
+            "updated_at": "2026-10-01T00:00:00Z",
+            "has_artifacts": True,
+            "is_archived": False
+        }]
+    }))
+
+    # Instantiating TaskManager should trigger auto-migration
+    manager = TaskManager(root_dir=tmp_path)
+
+    # Legacy directory should be removed
+    assert not legacy_dir.exists()
+
+    # Deliverables should now be in default workspace root
+    target_artifact = manager.get_workspace_dir("default") / "伊利股份_深度分析.md"
+    assert target_artifact.exists()
+    assert target_artifact.read_text(encoding="utf-8") == "伊利报告内容"
+
+    # Sessions should be migrated to task's private directory
+    target_session = manager.task_private_dir(legacy_task_id) / "sessions" / "session-1.log"
+    assert target_session.exists()
+    assert target_session.read_text(encoding="utf-8") == "subagent log"
 
 
 def test_create_workspace_assigns_a_fresh_id_and_the_given_display_name(manager: TaskManager):

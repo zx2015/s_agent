@@ -3,7 +3,11 @@ import json
 from agentscope.message import Msg, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
 from agentscope.state import AgentState, Task
 
-from server.service.history import agent_state_to_chat_messages, serialize_todos
+from server.service.history import (
+    agent_state_to_chat_messages,
+    get_paged_chat_messages,
+    serialize_todos,
+)
 
 
 def test_empty_state_returns_empty_list():
@@ -244,4 +248,60 @@ def test_interleaved_blocks_preserve_chronological_order():
     assert blocks[3] == {"type": "text", "content": "计算结果为 100，下面开始总结"}
     assert blocks[4] == {"type": "thinking", "content": "最后整理输出"}
     assert blocks[5] == {"type": "text", "content": "# 最终报告\n计算结果为 100。"}
+
+
+def test_get_paged_chat_messages_empty_state():
+    paged, has_more, total = get_paged_chat_messages(None)
+    assert paged == []
+    assert has_more is False
+    assert total == 0
+
+
+def test_get_paged_chat_messages_pagination_and_cursors():
+    # Build 10 messages: m0, m1, ..., m9
+    context = [
+        Msg(id=f"msg_{i}", name="user", role="user", content=[TextBlock(text=f"问题 {i}")])
+        for i in range(10)
+    ]
+    state = AgentState(context=context)
+
+    # 1. Total <= limit: should return all 10 messages, has_more=False
+    paged, has_more, total = get_paged_chat_messages(state, limit=15)
+    assert total == 10
+    assert has_more is False
+    assert len(paged) == 10
+    assert [m["id"] for m in paged] == [f"msg_{i}" for i in range(10)]
+
+    # 2. Latest page with limit=4: should return m6, m7, m8, m9 (last 4), has_more=True
+    paged, has_more, total = get_paged_chat_messages(state, limit=4)
+    assert total == 10
+    assert has_more is True
+    assert len(paged) == 4
+    assert [m["id"] for m in paged] == ["msg_6", "msg_7", "msg_8", "msg_9"]
+
+    # 3. Previous page before msg_6 with limit=4: should return m2, m3, m4, m5, has_more=True
+    paged_prev, has_more_prev, total = get_paged_chat_messages(state, limit=4, before_id="msg_6")
+    assert total == 10
+    assert has_more_prev is True
+    assert len(paged_prev) == 4
+    assert [m["id"] for m in paged_prev] == ["msg_2", "msg_3", "msg_4", "msg_5"]
+
+    # 4. Oldest page before msg_2 with limit=4: should return m0, m1, has_more=False
+    paged_oldest, has_more_oldest, total = get_paged_chat_messages(state, limit=4, before_id="msg_2")
+    assert total == 10
+    assert has_more_oldest is False
+    assert len(paged_oldest) == 2
+    assert [m["id"] for m in paged_oldest] == ["msg_0", "msg_1"]
+
+    # 5. before_id is oldest message msg_0: should return empty list, has_more=False
+    paged_empty, has_more_empty, total = get_paged_chat_messages(state, limit=4, before_id="msg_0")
+    assert total == 10
+    assert has_more_empty is False
+    assert paged_empty == []
+
+    # 6. limit <= 0 returns all
+    paged_all, has_more_all, total = get_paged_chat_messages(state, limit=0)
+    assert total == 10
+    assert has_more_all is False
+    assert len(paged_all) == 10
 

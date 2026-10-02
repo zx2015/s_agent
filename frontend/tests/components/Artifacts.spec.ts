@@ -8,36 +8,40 @@ import PreviewPane from '@/components/artifacts/PreviewPane.vue'
 import StandaloneArtifactViewer from '@/components/artifacts/StandaloneArtifactViewer.vue'
 import { useSessionStore } from '@/store/session'
 
+import FileTreePane from '@/components/artifacts/FileTreePane.vue'
+import SidebarRight from '@/components/artifacts/SidebarRight.vue'
+import TodoPanel from '@/components/artifacts/TodoPanel.vue'
+
 describe('ArtifactTabs', () => {
-  it('renders all five tabs', () => {
+  it('renders only two tabs: 待办 and 全部文件', () => {
     const wrapper = mount(ArtifactTabs, {
-      props: { activeTab: 'preview' },
+      props: { activeTab: 'todos' },
     })
-    expect(wrapper.text()).toContain('产物预览')
     expect(wrapper.text()).toContain('待办')
     expect(wrapper.text()).toContain('全部文件')
-    expect(wrapper.text()).toContain('文件变更')
-    expect(wrapper.text()).toContain('下载')
+    expect(wrapper.text()).not.toContain('产物预览')
+    expect(wrapper.text()).not.toContain('文件变更')
+    expect(wrapper.text()).not.toContain('下载')
+    expect(wrapper.findAll('.tab')).toHaveLength(2)
   })
 
   it('marks the active tab', () => {
     const wrapper = mount(ArtifactTabs, {
-      props: { activeTab: 'diff' },
+      props: { activeTab: 'files' },
     })
     const active = wrapper.findAll('.tab.active')
     expect(active).toHaveLength(1)
-    expect(active[0].text()).toBe('文件变更')
+    expect(active[0].text()).toBe('全部文件')
   })
 
   it('emits update on tab click', async () => {
     const wrapper = mount(ArtifactTabs, {
-      props: { activeTab: 'preview' },
+      props: { activeTab: 'todos' },
     })
     const tabs = wrapper.findAll('.tab')
-    // After adding 'todos', the indices are preview(0), todos(1), files(2),
-    // diff(3), download(4).
-    await tabs[3].trigger('click')
-    expect(wrapper.emitted('update:activeTab')?.[0]).toEqual(['diff'])
+    // Index 0 is todos, Index 1 is files
+    await tabs[1].trigger('click')
+    expect(wrapper.emitted('update:activeTab')?.[0]).toEqual(['files'])
   })
 })
 
@@ -299,6 +303,163 @@ describe('StandaloneArtifactViewer', () => {
     await vi.waitFor(() => {
       expect(wrapper.text()).toContain('恢复成功')
     })
+  })
+})
+
+describe('FileTreePane', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders empty message when no files exist', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ files: [] }),
+      }),
+    )
+
+    const wrapper = mount(FileTreePane, { props: { taskId: 't1' } })
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('暂无文件')
+    })
+  })
+
+  it('renders hierarchical tree with folders and files, supporting collapse/expand', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          files: [
+            { path: 'models', isDir: true },
+            { path: 'models/dcf.xlsx', isDir: false },
+            { path: 'summary.md', isDir: false },
+          ],
+        }),
+      }),
+    )
+
+    const wrapper = mount(FileTreePane, { props: { taskId: 't1' } })
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('models')
+      expect(wrapper.text()).toContain('dcf.xlsx')
+      expect(wrapper.text()).toContain('summary.md')
+    })
+
+    // Initially expanded
+    expect(wrapper.find('[data-test="tree-item-models/dcf.xlsx"]').exists()).toBe(true)
+    const chevron = wrapper.find('[data-test="chevron-models"]')
+    expect(chevron.text()).toBe('▾')
+
+    // Click folder to collapse
+    await wrapper.find('[data-test="tree-item-models"]').trigger('click')
+    expect(wrapper.find('[data-test="chevron-models"]').text()).toBe('▸')
+    expect(wrapper.find('[data-test="tree-item-models/dcf.xlsx"]').exists()).toBe(false)
+
+    // Click folder to expand again
+    await wrapper.find('[data-test="tree-item-models"]').trigger('click')
+    expect(wrapper.find('[data-test="chevron-models"]').text()).toBe('▾')
+    expect(wrapper.find('[data-test="tree-item-models/dcf.xlsx"]').exists()).toBe(true)
+  })
+
+  it('renders preview and download buttons on files with pure icons and NO text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          files: [{ path: 'report.md', isDir: false }],
+        }),
+      }),
+    )
+
+    const wrapper = mount(FileTreePane, { props: { taskId: 'task-99' } })
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('report.md')
+    })
+
+    const previewBtn = wrapper.find('[data-test="preview-btn-report.md"]')
+    const downloadBtn = wrapper.find('[data-test="download-btn-report.md"]')
+
+    expect(previewBtn.exists()).toBe(true)
+    expect(downloadBtn.exists()).toBe(true)
+
+    // Ensure icon classes are present
+    expect(previewBtn.find('.icon-preview').exists()).toBe(true)
+    expect(downloadBtn.find('.icon-download').exists()).toBe(true)
+
+    // Ensure pure icons with NO text
+    expect(previewBtn.text()).toBe('')
+    expect(downloadBtn.text()).toBe('')
+
+    // Ensure tooltips are set
+    expect(previewBtn.attributes('title')).toBe('预览')
+    expect(downloadBtn.attributes('title')).toBe('下载')
+
+    // Ensure download href and filename
+    expect(downloadBtn.attributes('href')).toBe('/api/tasks/task-99/artifacts/preview/report.md')
+    expect(downloadBtn.attributes('download')).toBe('report.md')
+  })
+
+  it('opens preview in new window with standalone URL for markdown files', async () => {
+    const openMock = vi.fn()
+    vi.stubGlobal('open', openMock)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          files: [{ path: 'deep_analysis.md', isDir: false }],
+        }),
+      }),
+    )
+
+    const wrapper = mount(FileTreePane, { props: { taskId: 't-demo' } })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="preview-btn-deep_analysis.md"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-test="preview-btn-deep_analysis.md"]').trigger('click')
+    expect(openMock).toHaveBeenCalledTimes(1)
+    const openedUrl = openMock.mock.calls[0][0]
+    expect(openedUrl).toContain('view=artifact')
+    expect(openedUrl).toContain('taskId=t-demo')
+    expect(openedUrl).toContain('filePath=deep_analysis.md')
+    expect(openMock.mock.calls[0][1]).toBe('_blank')
+  })
+})
+
+describe('SidebarRight', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('renders with default active tab as todos', () => {
+    const wrapper = mount(SidebarRight)
+    const activeTab = wrapper.find('.tab.active')
+    expect(activeTab.text()).toBe('待办')
+    expect(wrapper.findComponent(TodoPanel).exists()).toBe(true)
+    expect(wrapper.findComponent(FileTreePane).exists()).toBe(false)
+  })
+
+  it('switches to files tab when clicked', async () => {
+    const wrapper = mount(SidebarRight)
+    const tabs = wrapper.findAll('.tab')
+    // Index 1 is '全部文件'
+    await tabs[1].trigger('click')
+    expect(wrapper.findComponent(TodoPanel).exists()).toBe(false)
+    expect(wrapper.findComponent(FileTreePane).exists()).toBe(true)
   })
 })
 

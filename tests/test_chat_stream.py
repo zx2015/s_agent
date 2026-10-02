@@ -97,7 +97,8 @@ async def test_archive_and_reset_context_endpoints():
 
 @pytest.mark.asyncio
 async def test_list_artifacts_endpoint():
-    task = task_manager.create_task("default", "产物测试任务")
+    ws = task_manager.create_workspace("产物测试工作区")
+    task = task_manager.create_task(ws.id, "产物测试任务")
     ws_dir = task_manager.workspace_dir(task.id)
     (ws_dir / "test_report.md").write_text("# Test Report", encoding="utf-8")
     (ws_dir / "index.html").write_text("<h1>Hello</h1>", encoding="utf-8")
@@ -107,27 +108,90 @@ async def test_list_artifacts_endpoint():
     (sessions_dir / "tool_result-call_12345.txt").write_text("intermediate tool dump", encoding="utf-8")
     (ws_dir / ".gitkeep").write_text("", encoding="utf-8")
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        res = await client.get(f"/api/tasks/{task.id}/artifacts")
-        assert res.status_code == 200
-        data = res.json()
-        assert "artifacts" in data
-        assert len(data["artifacts"]) == 2
-        paths = [item["file_path"] for item in data["artifacts"]]
-        assert "test_report.md" in paths
-        assert "index.html" in paths
-        assert not any("sessions" in p for p in paths)
-        assert not any(p.startswith(".") for p in paths)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            res = await client.get(f"/api/tasks/{task.id}/artifacts")
+            assert res.status_code == 200
+            data = res.json()
+            assert "artifacts" in data
+            assert len(data["artifacts"]) == 2
+            paths = [item["file_path"] for item in data["artifacts"]]
+            assert "test_report.md" in paths
+            assert "index.html" in paths
+            assert not any("sessions" in p for p in paths)
+            assert not any(p.startswith(".") for p in paths)
 
-        # Direct preview of internal file must be rejected (404)
-        preview_res = await client.get(
-            f"/api/tasks/{task.id}/artifacts/preview/sessions/9ed720a1b0dc48d4abf86da9bc5d2237/tool_result-call_12345.txt"
-        )
-        assert preview_res.status_code == 404
+            # Direct preview of internal file must be rejected (404)
+            preview_res = await client.get(
+                f"/api/tasks/{task.id}/artifacts/preview/sessions/9ed720a1b0dc48d4abf86da9bc5d2237/tool_result-call_12345.txt"
+            )
+            assert preview_res.status_code == 404
 
-        # list_files must also exclude internal sessions
-        files_res = await client.get(f"/api/tasks/{task.id}/files")
-        assert files_res.status_code == 200
+            # list_files must also exclude internal sessions
+            files_res = await client.get(f"/api/tasks/{task.id}/files")
+            assert files_res.status_code == 200
+    finally:
+        await task_manager.delete_workspace(ws.id)
         file_paths = [f["path"] for f in files_res.json()["files"]]
         assert not any("sessions" in p for p in file_paths)
+
+
+@pytest.mark.asyncio
+async def test_get_task_messages_pagination():
+    ws = task_manager.create_workspace("msg_page_ws")
+    task = task_manager.create_task(ws.id, "测试分页任务")
+    from agentscope.message import Msg, TextBlock
+    from agentscope.state import AgentState
+
+    context = [
+        Msg(id=f"page_msg_{i}", name="user", role="user", content=[TextBlock(text=f"问 {i}")])
+        for i in range(25)
+    ]
+    mock_state = AgentState(context=context)
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch("server.main.agent_state_store.load", new_callable=AsyncMock) as mock_load:
+                mock_load.return_value = mock_state
+
+                # 1. Default request (limit=30 >= 25 messages)
+                resp = await client.get(f"/api/tasks/{task.id}/messages")
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["total"] == 25
+                assert data["has_more"] is False
+                assert len(data["messages"]) == 25
+
+                # 2. Limit=10: returns last 10 messages (indices 15..24)
+                resp10 = await client.get(f"/api/tasks/{task.id}/messages?limit=10")
+                assert resp10.status_code == 200
+                data10 = resp10.json()
+                assert data10["total"] == 25
+                assert data10["has_more"] is True
+                assert len(data10["messages"]) == 10
+                assert data10["messages"][0]["id"] == "page_msg_15"
+                assert data10["messages"][-1]["id"] == "page_msg_24"
+
+                # 3. Pagination with before_id="page_msg_15", limit=10: returns indices 5..14
+                resp_prev = await client.get(f"/api/tasks/{task.id}/messages?limit=10&before_id=page_msg_15")
+                assert resp_prev.status_code == 200
+                data_prev = resp_prev.json()
+                assert data_prev["total"] == 25
+                assert data_prev["has_more"] is True
+                assert len(data_prev["messages"]) == 10
+                assert data_prev["messages"][0]["id"] == "page_msg_5"
+                assert data_prev["messages"][-1]["id"] == "page_msg_14"
+
+                # 4. Oldest page before_id="page_msg_5", limit=10: returns indices 0..4, has_more=False
+                resp_old = await client.get(f"/api/tasks/{task.id}/messages?limit=10&before_id=page_msg_5")
+                assert resp_old.status_code == 200
+                data_old = resp_old.json()
+                assert data_old["total"] == 25
+                assert data_old["has_more"] is False
+                assert len(data_old["messages"]) == 5
+                assert data_old["messages"][0]["id"] == "page_msg_0"
+                assert data_old["messages"][-1]["id"] == "page_msg_4"
+    finally:
+        await task_manager.delete_workspace(ws.id)
 

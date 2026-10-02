@@ -54,7 +54,7 @@ def create_delegate_task_tool(
                            - "general": 通用分析与代码任务（默认超时 60s, max_iters=8）
             timeout_seconds: 自定义超时秒数（0 表示使用模板默认值）
             max_iters: 自定义最大推理迭代轮数（0 表示使用模板默认值）
-            persist_to_wiki: 是否授权子智能体将高价值认知与测算底稿自动写入本地投研维基 data/wiki/（默认为 True）
+            persist_to_wiki: 是否授权子智能体将高价值认知与测算底稿自动写入当前工作区投研维基 wiki/（默认为 True）
         返回:
             子智能体完成任务后产出的高密度结构化交付摘要与文件底稿路径。
         """

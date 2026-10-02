@@ -418,6 +418,22 @@ def _eval_node(node: ast.AST) -> Any:
         return _ALLOWED_UNARYOPS[type(node.op)](_eval_node(node.operand))
     if isinstance(node, (ast.List, ast.Tuple)):
         return [_eval_node(elt) for elt in node.elts]
+    if isinstance(node, ast.Dict):
+        evaluated_dict: dict[Any, Any] = {}
+        for k_node, v_node in zip(node.keys, node.values):
+            if k_node is None:
+                unpacked = _eval_node(v_node)
+                if isinstance(unpacked, dict):
+                    evaluated_dict.update(unpacked)
+                else:
+                    raise ValueError(f"无法解包非字典对象: {type(unpacked).__name__}")
+            else:
+                k_val = _eval_node(k_node)
+                v_val = _eval_node(v_node)
+                evaluated_dict[k_val] = v_val
+        return evaluated_dict
+    if isinstance(node, ast.Set):
+        return {_eval_node(elt) for elt in node.elts}
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name):
             raise ValueError(f"仅支持直接调用白名单函数，不支持属性或复杂调用: {ast.dump(node)}")
@@ -441,22 +457,31 @@ def calculate(expression: str) -> str:
     and any calculation involving more than two numbers must go through
     this tool rather than being computed mentally.
 
+    Supports single arithmetic expressions, list/tuple arrays, as well as
+    structured compound dictionaries (e.g. computing multiple support/resistance/stop
+    levels for one or more stocks in a single tool call).
+
     Args:
         expression (`str`):
-            A Python-style arithmetic expression or financial function call,
-            e.g.:
+            A Python-style arithmetic expression, financial function call,
+            or compound dictionary/list, e.g.:
             - `"(153.2 - 100) / 100 * 100"`
             - `"pct_change(25.90, 26.10)"`
             - `"pnl(300, 25.554, 26.10)"`
             - `"max_drawdown([27.69, 26.10, 25.00, 26.25, 23.96, 26.10])"`
             - `"sharpe([0.012, -0.005, 0.018, 0.022, -0.003, 0.015])"`
+            - `"{'name': '海康威视', 'cost_prot': round(31.025 * 0.9, 2), 'tp1': round(32.46 * 1.15, 2)}"`
+            - `"[{'code': '002415', 'target': round(32.46 * 1.15, 2)}]"`
     """
     try:
         tree = ast.parse(expression, mode="eval")
         result = _eval_node(tree.body)
-        if isinstance(result, dict):
-            formatted_json = json.dumps(result, ensure_ascii=False, indent=2)
-            return f"{expression} =\n{formatted_json}"
+        if isinstance(result, (dict, list)):
+            try:
+                formatted_json = json.dumps(result, ensure_ascii=False, indent=2)
+                return f"{expression} =\n{formatted_json}"
+            except (TypeError, ValueError):
+                pass
         return f"{expression} = {result}"
     except Exception as exc:  # noqa: BLE001 - surfaced to the model as text
         return f"计算失败：{exc}"

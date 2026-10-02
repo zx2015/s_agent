@@ -31,7 +31,8 @@ from agentscope.permission import (
 
 from server import config
 from server.tools.calculator import calculate
-from server.agent.tools_wiki import wiki_query, wiki_read, wiki_save_page
+from server.agent.tools_glob import WorkspaceGlob
+from server.agent.tools_wiki import create_wiki_tools, wiki_query, wiki_read, wiki_save_page
 from server.tools.stock import (
     finance_overview,
     finance_record_metric,
@@ -142,7 +143,10 @@ class ToolResolver:
         tool_names = expand_allowed_tools(allowed_tools)
         resolved_tools: List[ToolBase] = []
         resolved_ws = str(workspace_dir.resolve())
-        wiki_ws = str(Path(config.WIKI_DIR).resolve())
+        wiki_dir = (workspace_dir / "wiki").resolve()
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        wiki_ws = str(wiki_dir)
+        workspace_wiki_tools = create_wiki_tools(wiki_dir)
 
         # 1. 解析基础文件与命令工具
         if "Read" in tool_names:
@@ -152,7 +156,7 @@ class ToolResolver:
         if "Edit" in tool_names:
             resolved_tools.append(Edit())
         if "Glob" in tool_names:
-            resolved_tools.append(Glob())
+            resolved_tools.append(WorkspaceGlob(workspace_dir=workspace_dir))
         if "Grep" in tool_names:
             resolved_tools.append(Grep())
         if "Bash" in tool_names:
@@ -174,30 +178,30 @@ class ToolResolver:
         if "wiki_query" in tool_names:
             resolved_tools.append(
                 FunctionTool(
-                    wiki_query,
+                    workspace_wiki_tools["wiki_query"],
                     permission=PermissionDecision(
                         behavior=PermissionBehavior.ALLOW,
-                        message="检索本地投研维基",
+                        message="检索当前工作区投研维基",
                     ),
                 )
             )
         if "wiki_read" in tool_names:
             resolved_tools.append(
                 FunctionTool(
-                    wiki_read,
+                    workspace_wiki_tools["wiki_read"],
                     permission=PermissionDecision(
                         behavior=PermissionBehavior.ALLOW,
-                        message="读取本地投研维基页面",
+                        message="读取当前工作区投研维基页面",
                     ),
                 )
             )
         if "wiki_save_page" in tool_names:
             resolved_tools.append(
                 FunctionTool(
-                    wiki_save_page,
+                    workspace_wiki_tools["wiki_save_page"],
                     permission=PermissionDecision(
                         behavior=PermissionBehavior.ALLOW,
-                        message="编译成果沉淀入本地投研维基",
+                        message="编译成果沉淀入当前工作区投研维基",
                     ),
                 )
             )

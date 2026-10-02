@@ -10,7 +10,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -41,7 +41,11 @@ from server.service.events import (
     task_todos_changed_frame,
     todo_changed_after_tool,
 )
-from server.service.history import agent_state_to_chat_messages, serialize_todos
+from server.service.history import (
+    agent_state_to_chat_messages,
+    get_paged_chat_messages,
+    serialize_todos,
+)
 from server.service.memory_store import agent_state_store
 from server.service.task_manager import task_manager
 from server.service.title_generator import generate_title
@@ -167,19 +171,30 @@ async def delete_task(task_id: str) -> dict:
 
 
 @app.get("/api/tasks/{task_id}/messages")
-async def get_task_messages(task_id: str) -> dict:
-    """Hydrate the middle pane when the user switches tasks.
+async def get_task_messages(
+    task_id: str,
+    limit: int = Query(default=30, ge=0, le=200),
+    before_id: str | None = Query(default=None),
+) -> dict:
+    """Hydrate the middle pane with cursor-based pagination.
 
     The AgentScope `AgentState.context` already holds the full transcript;
-    this endpoint serialises it into the `ChatMessage` shape that the
-    frontend's session store consumes. When no agent state exists (the
-    task has never been chatted with), returns an empty list rather than
-    a 404 — a missing transcript is not an error, it's just blank.
+    this endpoint serialises it into the `ChatMessage` shape and returns
+    a paged slice along with `has_more` and `total` count.
     """
     if task_manager.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
     state = await agent_state_store.load(task_id)
-    return {"messages": agent_state_to_chat_messages(state)}
+    paged_messages, has_more, total = get_paged_chat_messages(
+        state,
+        limit=limit,
+        before_id=before_id,
+    )
+    return {
+        "messages": paged_messages,
+        "has_more": has_more,
+        "total": total,
+    }
 
 
 @app.get("/api/tasks/{task_id}/todos")
@@ -421,6 +436,7 @@ async def confirm_task(task_id: str, payload: ConfirmRequest) -> dict:
 
 IGNORED_WORKSPACE_PARTS = {
     ".git",
+    ".tasks",
     "sessions",
     "__pycache__",
     ".pytest_cache",

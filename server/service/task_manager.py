@@ -87,6 +87,8 @@ class TaskManager:
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._load()
         self._ensure_workspace("default", "默认工作区")
+        self.get_workspace_dir("default")
+        self._migrate_legacy_workspaces()
 
     # --- workspaces & tasks -------------------------------------------------
 
@@ -94,6 +96,7 @@ class TaskManager:
         if workspace_id not in self._workspaces:
             self._workspaces[workspace_id] = WorkspaceRecord(workspace_id, name)
             self._save()
+        self.get_workspace_dir(workspace_id)
         return self._workspaces[workspace_id]
 
     def create_workspace(self, name: str) -> WorkspaceRecord:
@@ -111,6 +114,7 @@ class TaskManager:
         workspace_id = f"workspace-{len(self._workspaces) + 1}-{int(time.time() * 1000)}"
         workspace = WorkspaceRecord(id=workspace_id, name=name)
         self._workspaces[workspace_id] = workspace
+        self.get_workspace_dir(workspace_id)
         self._save()
         return workspace
 
@@ -135,6 +139,7 @@ class TaskManager:
                 {
                     "id": workspace.id,
                     "name": workspace.name,
+                    "workspace_path": str(self.get_workspace_dir(workspace.id).resolve()),
                     "tasks": tasks_out,
                 },
             )
@@ -146,6 +151,7 @@ class TaskManager:
         task = TaskRecord(id=task_id, title=title, workspace_id=workspace_id)
         self._tasks[task_id] = task
         self.workspace_dir(task_id).mkdir(parents=True, exist_ok=True)
+        self.task_private_dir(task_id).mkdir(parents=True, exist_ok=True)
         self._save()
         return task
 
@@ -202,10 +208,23 @@ class TaskManager:
 
     async def delete_task(self, task_id: str) -> bool:
         """Permanently remove a task: metadata, cached agent, persisted
-        conversation history, and the workspace directory on disk.
+        conversation history, and the task's private directory on disk.
+
+        Note: The shared workspace directory (and all public deliverables in it)
+        is preserved so other tasks in the same workspace are not impacted.
         """
         if task_id not in self._tasks:
             return False
+
+        task = self._tasks[task_id]
+        # Clean up the task's private sandbox under .tasks/<task_id>
+        private_dir = self.task_private_dir(task_id)
+        shutil.rmtree(private_dir, ignore_errors=True)
+
+        # Also clean up legacy task dir if it existed (self.root_dir / task_id)
+        legacy_dir = self.root_dir / task_id
+        if legacy_dir.exists() and legacy_dir.is_dir():
+            shutil.rmtree(legacy_dir, ignore_errors=True)
 
         del self._tasks[task_id]
         self._agents.pop(task_id, None)
@@ -224,7 +243,6 @@ class TaskManager:
                 exc_info=True,
             )
 
-        shutil.rmtree(self.workspace_dir(task_id), ignore_errors=True)
         return True
 
     async def delete_workspace(self, workspace_id: str) -> bool:
@@ -232,18 +250,10 @@ class TaskManager:
 
         Mirrors deleting a folder on a real filesystem — its contents go
         with it. Each task is removed through `delete_task` so it gets
-        the exact same cleanup (metadata, cached agent, Redis state,
-        workspace directory) rather than a shortcut that only handles
-        the workspace record itself. Returns `False` without touching
-        anything if the workspace doesn't exist, or if it's the
-        "default" workspace (see `_ensure_workspace("default", ...)` in
-        `__init__` — always exists, and is the fallback every task lands
-        in when no other workspace has been created yet, so removing it
-        would leave the app with no default place to put a task). `main.py`
-        also checks this up front to return a clearer 400 instead of a
-        generic 404, but the guard is repeated here so this method is
-        safe to call directly (e.g. from tests) without relying on the
-        route layer.
+        the exact same cleanup (metadata, cached agent, Redis state)
+        and then the shared workspace directory is removed. Returns `False`
+        without touching anything if the workspace doesn't exist, or if it's
+        the "default" workspace (which is protected).
         """
         if workspace_id == "default" or workspace_id not in self._workspaces:
             return False
@@ -254,14 +264,109 @@ class TaskManager:
         for task_id in task_ids:
             await self.delete_task(task_id)
 
+        # Permanently remove the entire shared workspace directory
+        shutil.rmtree(self.get_workspace_dir(workspace_id), ignore_errors=True)
+
         del self._workspaces[workspace_id]
         self._save()
         return True
 
     # --- workspace directories ------------------------------------------------
 
+    def get_workspace_dir(self, workspace_id: str) -> Path:
+        """Get the physical root directory for a workspace."""
+        ws_dir = self.root_dir / workspace_id
+        ws_dir.mkdir(parents=True, exist_ok=True)
+        return ws_dir
+
     def workspace_dir(self, task_id: str) -> Path:
-        return self.root_dir / task_id
+        """Return the shared workspace directory for the task's workspace."""
+        task = self._tasks.get(task_id)
+        workspace_id = task.workspace_id if task else "default"
+        return self.get_workspace_dir(workspace_id)
+
+    def task_private_dir(self, task_id: str) -> Path:
+        """Return the private sandbox directory for a specific task."""
+        task = self._tasks.get(task_id)
+        workspace_id = task.workspace_id if task else "default"
+        pdir = self.get_workspace_dir(workspace_id) / ".tasks" / task_id
+        pdir.mkdir(parents=True, exist_ok=True)
+        return pdir
+
+    def get_workspace_wiki_dir(self, workspace_id: str) -> Path:
+        """Return the physical directory path for the given workspace's wiki."""
+        path = self.get_workspace_dir(workspace_id) / "wiki"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def workspace_wiki_dir(self, task_id: str) -> Path:
+        """Return the physical wiki directory for the workspace that task_id belongs to."""
+        task = self._tasks.get(task_id)
+        workspace_id = task.workspace_id if task else "default"
+        return self.get_workspace_wiki_dir(workspace_id)
+
+    def _migrate_legacy_workspaces(self) -> None:
+        """Migrate legacy per-task directories (workspaces/<task_id>/) into shared workspace directories."""
+        ignored = {
+            ".git",
+            ".tasks",
+            "sessions",
+            "__pycache__",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".mypy_cache",
+            "node_modules",
+        }
+        for task_id, task in list(self._tasks.items()):
+            legacy_dir = self.root_dir / task_id
+            if legacy_dir.exists() and legacy_dir.is_dir():
+                target_ws_dir = self.get_workspace_dir(task.workspace_id)
+                for item in legacy_dir.iterdir():
+                    if item.name.startswith(".") or item.name in ignored:
+                        continue
+                    target_file = target_ws_dir / item.name
+                    if not target_file.exists():
+                        try:
+                            shutil.move(str(item), str(target_file))
+                            logger.info("Migrated legacy artifact %s -> %s", item, target_file)
+                        except Exception:
+                            logger.warning("Failed to migrate artifact %s", item, exc_info=True)
+                legacy_sessions = legacy_dir / "sessions"
+                if legacy_sessions.exists() and legacy_sessions.is_dir():
+                    priv_sessions = self.task_private_dir(task_id) / "sessions"
+                    priv_sessions.parent.mkdir(parents=True, exist_ok=True)
+                    if not priv_sessions.exists():
+                        try:
+                            shutil.move(str(legacy_sessions), str(priv_sessions))
+                        except Exception:
+                            pass
+                shutil.rmtree(legacy_dir, ignore_errors=True)
+
+        # Migrate legacy global data/wiki/ to default workspace wiki
+        legacy_wiki = Path(config.REPO_ROOT) / "data" / "wiki"
+        if legacy_wiki.exists() and legacy_wiki.is_dir():
+            target_wiki = self.get_workspace_wiki_dir("default")
+            target_wiki.mkdir(parents=True, exist_ok=True)
+            for sub in ("entities", "industries", "analyses", "raw"):
+                src_sub = legacy_wiki / sub
+                dst_sub = target_wiki / sub
+                if src_sub.exists() and src_sub.is_dir():
+                    dst_sub.mkdir(parents=True, exist_ok=True)
+                    for f in src_sub.iterdir():
+                        dst_f = dst_sub / f.name
+                        if not dst_f.exists():
+                            try:
+                                shutil.copy2(str(f), str(dst_f))
+                            except Exception:
+                                pass
+            for meta_file in ("SCHEMA.md", "index.md", "log.md"):
+                src_meta = legacy_wiki / meta_file
+                dst_meta = target_wiki / meta_file
+                if src_meta.exists() and not dst_meta.exists():
+                    try:
+                        shutil.copy2(str(src_meta), str(dst_meta))
+                    except Exception:
+                        pass
 
     # --- agents --------------------------------------------------------------
 

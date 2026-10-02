@@ -316,7 +316,7 @@ describe('session store', () => {
     it('targets the right URL', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ messages: [] }),
+        json: async () => ({ messages: [], has_more: false, total: 0 }),
       })
       vi.stubGlobal('fetch', fetchMock)
 
@@ -324,9 +324,66 @@ describe('session store', () => {
       await store.loadHistory('abc')
 
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/tasks/abc/messages',
+        expect.stringContaining('/api/tasks/abc/messages'),
         expect.objectContaining({ headers: expect.any(Object) }),
       )
+    })
+
+    it('populates hasMoreHistory and prepends older messages on loadMoreHistory', async () => {
+      const store = useSessionStore()
+
+      // Initial page: returns message 2 and 3, has_more: true, total: 4
+      const initialFetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/api/tasks/t1/messages')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              messages: [
+                { id: 'm2', role: 'user', text: '第二问', thinking: '', toolCalls: [], streaming: false },
+                { id: 'm3', role: 'assistant', text: '第二答', thinking: '', toolCalls: [], streaming: false },
+              ],
+              has_more: true,
+              total: 4,
+            }),
+          })
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) })
+      })
+      vi.stubGlobal('fetch', initialFetch)
+
+      await store.loadHistory('t1')
+
+      expect(store.messages.map((m) => m.id)).toEqual(['m2', 'm3'])
+      expect(store.hasMoreHistory).toBe(true)
+      expect(store.totalHistoryCount).toBe(4)
+      expect(store.remainingHistoryCount).toBe(2)
+
+      // Load older page: returns message 0 and 1, has_more: false
+      const olderFetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/api/tasks/t1/messages')) {
+          expect(url).toContain('before_id=m2')
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              messages: [
+                { id: 'm0', role: 'user', text: '第零问', thinking: '', toolCalls: [], streaming: false },
+                { id: 'm1', role: 'assistant', text: '第一答', thinking: '', toolCalls: [], streaming: false },
+              ],
+              has_more: false,
+              total: 4,
+            }),
+          })
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) })
+      })
+      vi.stubGlobal('fetch', olderFetch)
+
+      const loaded = await store.loadMoreHistory('t1')
+      expect(loaded).toBe(true)
+      // Prepending verified: m0, m1 are placed before m2, m3
+      expect(store.messages.map((m) => m.id)).toEqual(['m0', 'm1', 'm2', 'm3'])
+      expect(store.hasMoreHistory).toBe(false)
+      expect(store.remainingHistoryCount).toBe(0)
     })
   })
 })

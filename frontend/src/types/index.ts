@@ -48,6 +48,12 @@ export interface ChatMessage {
   streaming: boolean
 }
 
+export interface MessagesResponse {
+  messages: ChatMessage[]
+  has_more: boolean
+  total: number
+}
+
 export interface ToolCallRecord {
   callId: string
   tool: string

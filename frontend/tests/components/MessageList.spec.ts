@@ -99,4 +99,28 @@ describe('MessageList', () => {
     expect(textElements[1].text()).toContain('后置总结')
     expect(wrapper.text()).toContain('子智能体委派 (分析师)')
   })
+
+  it('renders history loader button when hasMoreHistory is true and handles click', async () => {
+    const { wrapper, store } = mountList()
+    expect(wrapper.find('[data-test="history-loader"]').exists()).toBe(false)
+
+    // Set hasMoreHistory
+    store.addUserMessage('当前消息')
+    store.hasMoreHistory = true
+    store.totalHistoryCount = 5
+    await wrapper.vm.$nextTick()
+
+    const loader = wrapper.find('[data-test="history-loader"]')
+    expect(loader.exists()).toBe(true)
+    expect(loader.text()).toContain('加载更早历史消息 (还有 4 条)')
+
+    // Clicking button triggers loadMoreHistory
+    let loadCalled = false
+    store.loadMoreHistory = async () => {
+      loadCalled = true
+      return true
+    }
+    await wrapper.find('[data-test="load-more-btn"]').trigger('click')
+    expect(loadCalled).toBe(true)
+  })
 })

@@ -107,7 +107,7 @@ class DynamicSubAgentRunner:
                 return (
                     f"### 【{self.role}·执行超时/中断告警】\n"
                     f"- **状态**：子任务执行耗时 {elapsed:.1f} 秒，未能正常收敛汇总。\n"
-                    f"- **维基落盘检查**：子智能体可能已将部分底稿写入本地维基（data/wiki/），请主 Agent 优先使用 `wiki_query` 检查是否已有最新底稿；\n"
+                    f"- **维基落盘检查**：子智能体可能已将部分底稿写入当前工作区维基（wiki/），请主 Agent 优先使用 `wiki_query` 检查是否已有最新底稿；\n"
                     f"- **排查建议**：如确需更多数据，请将问题拆解为更小的垂直粒度后再委派。"
                 )
 
@@ -123,7 +123,7 @@ class DynamicSubAgentRunner:
             return (
                 f"### 【{self.role}·执行超时告警】\n"
                 f"- **状态**：子任务在执行 {effective_timeout} 秒后超出时限未完全结束。\n"
-                f"- **维基落盘检查**：子智能体可能已在超时前完成了部分底稿落盘，请主 Agent 优先使用 `wiki_query` 检查本地维基；\n"
+                f"- **维基落盘检查**：子智能体可能已在超时前完成了部分底稿落盘，请主 Agent 优先使用 `wiki_query` 检查当前工作区维基；\n"
                 f"- **排查建议**：请主 Agent 检查当前子任务是否过于宽泛，建议拆解为更小的具体问题，"
                 f"或在 delegate_task 中增大 timeout_seconds 重新调用。"
             )
@@ -180,7 +180,9 @@ class DynamicSubAgentRunner:
         )
 
         # 3. 组装双层系统提示词
-        wiki_dir_str = str(Path(config.WIKI_DIR).resolve())
+        wiki_dir = (self.workspace_dir / "wiki").resolve()
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        wiki_dir_str = str(wiki_dir)
         system_prompt = build_subagent_system_prompt(
             base_template=self.base_template,
             role=self.role,
@@ -249,7 +251,7 @@ class DynamicSubAgentRunner:
             agent._engine.add_rule(
                 PermissionRule(
                     tool_name=fs_tool,
-                    rule_content="data/wiki/**",
+                    rule_content="wiki/**",
                     behavior=PermissionBehavior.ALLOW,
                     source="subagentSandbox",
                 )

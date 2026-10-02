@@ -160,6 +160,45 @@ def agent_state_to_chat_messages(state: AgentState | None) -> list[dict[str, Any
     return messages
 
 
+def get_paged_chat_messages(
+    state: AgentState | None,
+    limit: int = 30,
+    before_id: str | None = None,
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """Return a paged slice of chat messages, plus has_more flag and total count.
+
+    Args:
+        state: The saved AgentState from Redis.
+        limit: Number of messages to return in this page. If limit <= 0, returns all.
+        before_id: Cursor pointing to a message id. When provided, returns messages
+            immediately preceding this message. When None, returns the latest messages.
+
+    Returns:
+        (paged_messages, has_more, total)
+    """
+    all_messages = agent_state_to_chat_messages(state)
+    total = len(all_messages)
+    if total == 0:
+        return [], False, 0
+
+    if limit <= 0:
+        return all_messages, False, total
+
+    if before_id:
+        target_idx = next((i for i, m in enumerate(all_messages) if m.get("id") == before_id), -1)
+        if target_idx == -1:
+            end_idx = total
+        else:
+            end_idx = target_idx
+    else:
+        end_idx = total
+
+    start_idx = max(0, end_idx - limit)
+    paged = all_messages[start_idx:end_idx]
+    has_more = start_idx > 0
+    return paged, has_more, total
+
+
 def serialize_todos(state: AgentState | None) -> list[dict[str, Any]]:
     """Convert an AgentState's task list into the frontend TodoItem shape.
 

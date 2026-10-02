@@ -3,11 +3,8 @@
     <ArtifactTabs v-model:active-tab="activeTab" />
 
     <div class="pane-body">
-      <PreviewPane v-if="activeTab === 'preview'" :artifact="activeArtifact" :task-id="taskId" />
-      <TodoPanel v-else-if="activeTab === 'todos'" />
+      <TodoPanel v-if="activeTab === 'todos'" />
       <FileTreePane v-else-if="activeTab === 'files'" :task-id="taskId" />
-      <DiffPane v-else-if="activeTab === 'diff'" :task-id="taskId" />
-      <DownloadPane v-else :task-id="taskId" />
     </div>
   </McLayoutAside>
 </template>
@@ -16,28 +13,19 @@
 import { computed, ref, watch } from 'vue'
 import { McLayoutAside } from '@matechat/core'
 import ArtifactTabs, { type ArtifactTabId } from './ArtifactTabs.vue'
-import PreviewPane from './PreviewPane.vue'
 import TodoPanel from './TodoPanel.vue'
 import FileTreePane from './FileTreePane.vue'
-import DiffPane from './DiffPane.vue'
-import DownloadPane from './DownloadPane.vue'
-import { useSessionStore } from '@/store/session'
 import { useWorkspaceStore } from '@/store/workspaces'
 
-const session = useSessionStore()
 const workspace = useWorkspaceStore()
 
-const activeTab = ref<ArtifactTabId>('preview')
+const activeTab = ref<ArtifactTabId>('todos')
 
 const taskId = computed(() => workspace.activeTaskId)
-const activeArtifact = computed(() => session.artifacts[0] ?? null)
 
-// Reset the active tab back to Preview whenever the user switches (or
-// deletes) the active task. Without this, switching from a task where
-// the user was looking at "Diff" to a new task would leave the right
-// pane stuck on Diff showing nothing useful.
+// Reset the active tab back to 'todos' whenever the user switches (or deletes) the active task.
 watch(taskId, () => {
-  activeTab.value = 'preview'
+  activeTab.value = 'todos'
 })
 </script>
 
