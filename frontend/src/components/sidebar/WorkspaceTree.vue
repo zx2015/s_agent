@@ -361,6 +361,10 @@ async function onDeleteWorkspaceClick(
   background: #ff7d00;
 }
 
+.status-aborted .status-dot {
+  background: #86909c;
+}
+
 .artifact-badge {
   font-size: 11px;
   color: var(--color-text-muted);

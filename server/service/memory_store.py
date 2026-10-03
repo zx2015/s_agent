@@ -53,9 +53,10 @@ logger = logging.getLogger(__name__)
 
 def sanitize_agent_state(state: AgentState | None) -> bool:
     """
-    检查并修复 state 中的挂起/未决工具调用 (ToolCallState.ASKING / SUBMITTED)。
-    若某轮回复异常中断、超时、用户取消或收到未支持的外部工具调用，避免残留的
-    未决状态导致下一轮 reply_stream 抛出 "Agent is waiting for ... tool calls" 异常。
+    检查并修复 state 中的挂起/未决或孤立工具调用。
+    匹配所有未完成状态 (PENDING, ASKING, ALLOWED, SUBMITTED 等非 FINISHED 状态)，
+    并补齐缺失的对应 ToolResultBlock，避免在后续推理或持久化时触发
+    LiteLLM / OpenAI 协议级 400 报错或 AgentScope awaiting tool calls 异常。
 
     返回是否对 state 进行了修复修改。
     """
@@ -70,19 +71,20 @@ def sanitize_agent_state(state: AgentState | None) -> bool:
             b.id for b in msg.get_content_blocks("tool_result") if hasattr(b, "id")
         }
         for b in msg.get_content_blocks("tool_call"):
-            if b.state in (ToolCallState.ASKING, ToolCallState.SUBMITTED):
+            if b.state != ToolCallState.FINISHED:
                 b.state = ToolCallState.FINISHED
                 modified = True
-                if b.id not in result_ids:
-                    msg.content.append(
-                        ToolResultBlock(
-                            id=b.id,
-                            name=b.name,
-                            output=[TextBlock(type="text", text="[已自动重置未决工具调用]")],
-                            state=ToolResultState.INTERRUPTED,
-                        )
+            if b.id not in result_ids:
+                msg.content.append(
+                    ToolResultBlock(
+                        id=b.id,
+                        name=b.name,
+                        output="[已自动重置未决工具调用]",
+                        state=ToolResultState.INTERRUPTED,
                     )
-                    result_ids.add(b.id)
+                )
+                result_ids.add(b.id)
+                modified = True
     return modified
 
 _KEY_PREFIX = "s_agent:agent_state:"
@@ -116,6 +118,8 @@ class AgentStateStore:
         return self._get_client()
 
     async def save(self, task_id: str, state: AgentState) -> None:
+        """持久化 AgentState。边界保证：写入前自动执行净化，确保落盘状态始终完备合规。"""
+        sanitize_agent_state(state)
         await self._client.set(
             _key(task_id),
             state.model_dump_json(),
@@ -129,6 +133,9 @@ class AgentStateStore:
         schema-incompatible AgentScope version) is treated the same as
         "no saved state" rather than raised — resuming with fresh, empty
         history is strictly better than a 500 on the next message.
+
+        保持只读语义：若加载的旧数据包含未决工具调用，仅在内存中净化，
+        绝不在只读 load() 中无锁写回 Redis，消除与活跃 turn 的并发覆盖竞态。
         """
         raw = await self._client.get(_key(task_id))
         if raw is None:
@@ -136,11 +143,10 @@ class AgentStateStore:
         try:
             state = AgentState.model_validate_json(raw)
             if sanitize_agent_state(state):
-                logger.warning(
-                    "任务 %s 历史中存在未决的工具调用，已自动清理修复并重新持久化",
+                logger.info(
+                    "任务 %s 历史中存在未决或不完备的工具调用，已在内存中自动净化修复",
                     task_id,
                 )
-                await self.save(task_id, state)
             return state
         except ValidationError:
             logger.warning(

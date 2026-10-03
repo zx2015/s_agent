@@ -8,8 +8,10 @@ from httpx import ASGITransport, AsyncClient
 from agentscope.event import (
     ExternalExecutionResultEvent,
     ReplyEndEvent,
+    ReplyFinishedReason,
     RequireExternalExecutionEvent,
     TextBlockDeltaEvent,
+    UserInterruptEvent,
 )
 from agentscope.message import ToolCallBlock
 from server.main import app, task_manager
@@ -71,6 +73,7 @@ async def test_system_info_endpoint():
         res = await client.get("/api/system/info")
         assert res.status_code == 200
         data = res.json()
+        assert data["version"] == "0.2.0"
         assert "workspaceRoot" in data
         assert "modelName" in data
         assert "baseUrl" in data
@@ -209,6 +212,7 @@ async def test_chat_stream_handles_require_external_execution_event():
     class FakeAgent:
         def __init__(self):
             self.state = type("State", (), {"tasks_context": None, "context": []})()
+            self.toolkit = type("Toolkit", (), {"get_tool": AsyncMock(return_value=None)})()
             self.call_count = 0
 
         async def reply_stream(self, inputs):
@@ -249,7 +253,116 @@ async def test_chat_stream_handles_require_external_execution_event():
                     frames.append(chunk)
 
             full_body = "".join(frames)
+            assert "检测到模型发起外部工具交互" in full_body
             assert "已处理外部工具回调" in full_body
             assert "event: done" in full_body
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_handles_external_execution_attempts_exceeded():
+    task = task_manager.create_task("default", "外部执行超限熔断测试")
+
+    class LoopExternalAgent:
+        def __init__(self):
+            self.state = type("State", (), {"tasks_context": None, "context": []})()
+            self.toolkit = type("Toolkit", (), {"get_tool": AsyncMock(return_value=None)})()
+            self.inputs_received = []
+
+        async def reply_stream(self, inputs):
+            self.inputs_received.append(inputs)
+            if isinstance(inputs, UserInterruptEvent):
+                yield TextBlockDeltaEvent(reply_id="r_ext", block_id="b_ext", delta="检测到中断指令，退出")
+                yield ReplyEndEvent(
+                    reply_id="r_ext",
+                    session_id="s_ext",
+                    finished_reason=ReplyFinishedReason.INTERRUPTED,
+                )
+                return
+
+            # Keep requesting external execution
+            yield RequireExternalExecutionEvent(
+                reply_id="r_ext",
+                tool_calls=[
+                    ToolCallBlock(
+                        type="tool_call",
+                        id=f"tc_ext_{len(self.inputs_received)}",
+                        name="AskUser",
+                        input="{}",
+                    )
+                ],
+            )
+
+    agent = LoopExternalAgent()
+
+    with patch.object(task_manager, "get_or_create_agent", new=AsyncMock(return_value=agent)):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            frames: list[str] = []
+            async with client.stream(
+                "POST",
+                "/api/chat",
+                json={"task_id": task.id, "message": "测试"},
+            ) as response:
+                assert response.status_code == 200
+                async for chunk in response.aiter_text():
+                    frames.append(chunk)
+
+            full_body = "".join(frames)
+            assert "外部工具交互多次未决，已自动终止该次调用" in full_body
+            assert '{"task_status": "aborted"}' in full_body
+
+    record = task_manager.get_task(task.id)
+    assert record is not None
+    assert record.status == "aborted"
+    # Verify UserInterruptEvent was genuinely passed to agent.reply_stream
+    assert any(isinstance(inp, UserInterruptEvent) for inp in agent.inputs_received)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_cancelled_marks_task_aborted():
+    task = task_manager.create_task("default", "取消任务测试")
+
+    class SlowAgent:
+        def __init__(self):
+            self.state = type("State", (), {"tasks_context": None, "context": []})()
+            self.toolkit = type("Toolkit", (), {"get_tool": AsyncMock(return_value=None)})()
+
+        async def reply_stream(self, inputs):
+            yield TextBlockDeltaEvent(reply_id="r1", block_id="b1", delta="正在长篇思考...")
+            await asyncio.sleep(2)
+
+    with patch.object(task_manager, "get_or_create_agent", new=AsyncMock(return_value=SlowAgent())):
+        async with (
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client1,
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client2,
+        ):
+            frames: list[str] = []
+
+            async def stream_call():
+                async with client1.stream(
+                    "POST",
+                    "/api/chat",
+                    json={"task_id": task.id, "message": "测试取消"},
+                ) as response:
+                    assert response.status_code == 200
+                    async for chunk in response.aiter_text():
+                        frames.append(chunk)
+
+            stream_task = asyncio.create_task(stream_call())
+            # Give the stream a moment to connect and start running
+            await asyncio.sleep(0.1)
+
+            # Call abort endpoint to cancel turn
+            abort_resp = await client2.post(f"/api/tasks/{task.id}/abort")
+            assert abort_resp.status_code == 200
+            assert abort_resp.json()["aborted"] is True
+
+            await stream_task
+
+    record = task_manager.get_task(task.id)
+    assert record is not None
+    assert record.status == "aborted"
+    full_body = "".join(frames)
+    assert '{"task_status": "aborted"}' in full_body
+
 
 

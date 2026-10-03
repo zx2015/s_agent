@@ -19,14 +19,16 @@ from agentscope.event import (
     ConfirmResult,
     ExternalExecutionResultEvent,
     ReplyEndEvent,
+    ReplyFinishedReason,
     RequireExternalExecutionEvent,
     RequireUserConfirmEvent,
     ToolResultEndEvent,
     UserConfirmResultEvent,
+    UserInterruptEvent,
 )
 from agentscope.message import Msg, TextBlock, ToolResultBlock, ToolResultState
 
-from server import config
+from server import __version__, config
 from server.schemas.chat import (
     ChatRequest,
     ConfirmRequest,
@@ -49,13 +51,13 @@ from server.service.history import (
     get_paged_chat_messages,
     serialize_todos,
 )
-from server.service.memory_store import agent_state_store, sanitize_agent_state
+from server.service.memory_store import agent_state_store
 from server.service.task_manager import task_manager
 from server.service.title_generator import generate_title
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="s_agent backend")
+app = FastAPI(title="s_agent backend", version=__version__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -116,6 +118,7 @@ async def delete_workspace(workspace_id: str) -> dict:
 @app.get("/api/system/info")
 async def get_system_info() -> dict:
     return {
+        "version": __version__,
         "workspaceRoot": str(config.WORKSPACES_ROOT.resolve()),
         "modelName": config.MODEL_NAME,
         "baseUrl": config.LITELLM_BASE_URL,
@@ -284,6 +287,7 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
         )
 
         try:
+            external_execution_attempts = 0
             while True:
                 pending_reply_id: str | None = None
                 pending_tool_calls = None
@@ -303,22 +307,68 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                             event.reply_id,
                             [tc.name for tc in event.tool_calls],
                         )
-                        inputs = ExternalExecutionResultEvent(
-                            reply_id=event.reply_id,
-                            execution_results=[
+                        external_execution_attempts += 1
+                        if external_execution_attempts > 2:
+                            logger.error(
+                                "外部工具执行重试超限 (attempts=%d)，触发 UserInterruptEvent 中断",
+                                external_execution_attempts,
+                            )
+                            await turn.broadcast(
+                                sse_frame(
+                                    "text_delta",
+                                    {"text": "\n[系统提示: 外部工具交互多次未决，已自动终止该次调用]\n"},
+                                )
+                            )
+                            inputs = UserInterruptEvent(reply_id=event.reply_id)
+                            pending_reply_id = event.reply_id
+                            is_external_execution = True
+                            break
+
+                        await turn.broadcast(
+                            sse_frame(
+                                "text_delta",
+                                {
+                                    "text": "\n[系统提示: 检测到模型发起外部工具交互，当前环境不支持，已通知模型以自然语言直接回复]\n"
+                                },
+                            )
+                        )
+                        execution_results = []
+                        for tc in event.tool_calls:
+                            meta: dict = {}
+                            try:
+                                tool = await agent.toolkit.get_tool(tc.name)
+                                schema = getattr(tool, "metadata_schema", None)
+                                if isinstance(schema, dict):
+                                    req = schema.get("required", [])
+                                    props = schema.get("properties", {})
+                                    for field_name in req:
+                                        t = props.get(field_name, {}).get("type")
+                                        if t == "object":
+                                            meta[field_name] = {}
+                                        elif t == "array":
+                                            meta[field_name] = []
+                                        elif t == "string":
+                                            meta[field_name] = ""
+                                        elif t in ("integer", "number"):
+                                            meta[field_name] = 0
+                                        elif t == "boolean":
+                                            meta[field_name] = False
+                                        else:
+                                            meta[field_name] = {}
+                            except Exception:
+                                pass
+                            execution_results.append(
                                 ToolResultBlock(
                                     id=tc.id,
                                     name=tc.name,
-                                    output=[
-                                        TextBlock(
-                                            type="text",
-                                            text="[系统提示: 当前环境不支持外部工具执行交互，请直接在对话回复中以自然语言向用户澄清或说明]",
-                                        )
-                                    ],
+                                    output="[系统提示: 当前环境不支持外部工具执行交互，请直接在对话回复中以自然语言向用户澄清或说明]",
+                                    metadata=meta,
                                     state=ToolResultState.ERROR,
                                 )
-                                for tc in event.tool_calls
-                            ],
+                            )
+                        inputs = ExternalExecutionResultEvent(
+                            reply_id=event.reply_id,
+                            execution_results=execution_results,
                         )
                         pending_reply_id = event.reply_id
                         is_external_execution = True
@@ -360,12 +410,18 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                             )
                         )
 
-                        # 4. 推送 done 结束帧
+                        # 4. 推送 done 结束帧并按实际完成状态持久化
+                        final_status = "completed"
+                        if event.error or getattr(event, "finished_reason", None) == ReplyFinishedReason.ERROR:
+                            final_status = "failed"
+                        elif getattr(event, "finished_reason", None) == ReplyFinishedReason.INTERRUPTED:
+                            final_status = "aborted"
+
                         for frame in translator.translate(event):
                             await turn.broadcast(frame)
 
                         await task_manager.save_agent_state(payload.task_id)
-                        task_manager.update_task(payload.task_id, status="completed")
+                        task_manager.update_task(payload.task_id, status=final_status)
                         return
 
                     for frame in translator.translate(event):
@@ -415,14 +471,12 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     ],
                 )
         except asyncio.CancelledError:
-            task_manager.update_task(payload.task_id, status="completed")
-            sanitize_agent_state(agent.state)
+            task_manager.update_task(payload.task_id, status="aborted")
             await task_manager.save_agent_state(payload.task_id)
             await turn.broadcast(sse_frame("done", {"task_status": "aborted"}))
             raise
         except Exception as exc:  # noqa: BLE001 - surfaced to the client
             task_manager.update_task(payload.task_id, status="failed")
-            sanitize_agent_state(agent.state)
             await task_manager.save_agent_state(payload.task_id)
             await turn.broadcast(sse_frame("text_delta", {"text": f"\n\n[后端错误: {exc}]"}))
             await turn.broadcast(sse_frame("done", {"task_status": "failed"}))

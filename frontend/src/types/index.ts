@@ -1,6 +1,6 @@
 /** Shared domain types for the workbench UI. */
 
-export type TaskStatus = 'running' | 'completed' | 'suspended' | 'failed'
+export type TaskStatus = 'running' | 'completed' | 'suspended' | 'failed' | 'aborted'
 
 export interface Task {
   id: string

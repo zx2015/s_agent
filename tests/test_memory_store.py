@@ -173,15 +173,65 @@ async def test_load_auto_heals_submitted_or_asking_tool_calls(store: AgentStateS
         # Save raw state with SUBMITTED tool call directly into Redis client
         await store._client.set(_key(task_id), state.model_dump_json())
 
-        # load() should heal it automatically
+        # load() should heal it in-memory cleanly without breaking read-only semantics
         healed_state = await store.load(task_id)
         assert healed_state is not None
         assert len(healed_state.get_awaiting_tool_calls("Assistant")) == 0
+    finally:
+        await store.delete(task_id)
 
-        # And verify the healed state was persisted back to Redis
+
+@pytest.mark.asyncio
+async def test_save_self_sanitizes_allowed_and_pending_states(store: AgentStateStore):
+    task_id = _unique_task_id()
+    state = AgentState()
+    state.context.append(
+        Msg(
+            name="Assistant",
+            role="assistant",
+            content=[
+                ToolCallBlock(
+                    type="tool_call",
+                    id="call_allowed",
+                    name="Calculator",
+                    input="{}",
+                    state=ToolCallState.ALLOWED,
+                ),
+                ToolCallBlock(
+                    type="tool_call",
+                    id="call_pending",
+                    name="Bash",
+                    input="{}",
+                    state=ToolCallState.PENDING,
+                ),
+            ],
+        ),
+    )
+
+    try:
+        # store.save() must automatically sanitize unfinished states before writing
+        await store.save(task_id, state)
+
         reloaded_raw = await store._client.get(_key(task_id))
         reloaded_state = AgentState.model_validate_json(reloaded_raw)
         assert len(reloaded_state.get_awaiting_tool_calls("Assistant")) == 0
+
+        # Tool calls should be FINISHED with INTERRUPTED string results
+        tcs = reloaded_state.context[0].get_content_blocks("tool_call")
+        assert all(tc.state == ToolCallState.FINISHED for tc in tcs)
+        trs = reloaded_state.context[0].get_content_blocks("tool_result")
+        assert len(trs) == 2
+        assert all(isinstance(tr.output, str) for tr in trs)
     finally:
         await store.delete(task_id)
+
+
+def test_serialize_tool_output_unpacks_textblocks():
+    from server.service.history import _serialize_tool_output
+
+    # List of TextBlocks
+    blocks = [TextBlock(type="text", text="第一行"), TextBlock(type="text", text="第二行")]
+    serialized = _serialize_tool_output(blocks)
+    assert serialized == "第一行\n第二行"
+    assert "TextBlock(" not in serialized
 

@@ -35,7 +35,7 @@ from agentscope.agent import Agent
 from server import config
 from server.agent.core import build_agent
 from server.schemas.chat import now_iso
-from server.service.memory_store import agent_state_store, sanitize_agent_state
+from server.service.memory_store import agent_state_store
 
 logger = logging.getLogger(__name__)
 
@@ -448,7 +448,6 @@ class TaskManager:
         if agent is None:
             return
         try:
-            sanitize_agent_state(agent.state)
             await agent_state_store.save(task_id, agent.state)
         except Exception:  # noqa: BLE001 - best-effort, see docstring
             logger.warning(

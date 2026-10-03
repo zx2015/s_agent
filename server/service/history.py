@@ -28,6 +28,18 @@ def _serialize_tool_output(output: Any) -> str:
         return ""
     if isinstance(output, str):
         return output
+    if isinstance(output, (list, tuple)):
+        texts: list[str] = []
+        for item in output:
+            if hasattr(item, "text"):
+                texts.append(str(item.text))
+            elif isinstance(item, dict) and "text" in item:
+                texts.append(str(item["text"]))
+            elif isinstance(item, str):
+                texts.append(item)
+            else:
+                texts.append(str(item))
+        return "\n".join(texts)
     try:
         return json.dumps(output, ensure_ascii=False)
     except (TypeError, ValueError):

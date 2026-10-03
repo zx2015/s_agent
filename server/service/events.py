@@ -25,6 +25,7 @@ from typing import Any
 from agentscope.event import (
     HintBlockEvent,
     ReplyEndEvent,
+    ReplyFinishedReason,
     RequireUserConfirmEvent,
     TextBlockDeltaEvent,
     ThinkingBlockDeltaEvent,
@@ -179,7 +180,12 @@ class AgentEventTranslator:
             ]
 
         if isinstance(event, ReplyEndEvent):
-            status = "failed" if event.error else "completed"
+            if event.error or getattr(event, "finished_reason", None) == ReplyFinishedReason.ERROR:
+                status = "failed"
+            elif getattr(event, "finished_reason", None) == ReplyFinishedReason.INTERRUPTED:
+                status = "aborted"
+            else:
+                status = "completed"
             return [sse_frame("done", {"task_status": status})]
 
         return []

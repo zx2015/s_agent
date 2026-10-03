@@ -131,6 +131,8 @@ def test_require_confirm_frame_uses_bash_command_as_the_shown_command():
 
 
 def test_reply_end_frame_reports_completed_and_failed():
+    from agentscope.event import ReplyFinishedReason
+
     translator = AgentEventTranslator()
     event, data = _parse_one(
         translator.translate(ReplyEndEvent(reply_id="r1", session_id="s1")),
@@ -143,6 +145,30 @@ def test_reply_end_frame_reports_completed_and_failed():
                 reply_id="r1",
                 session_id="s1",
                 error=ErrorInfo(message="boom"),
+            ),
+        ),
+    )
+    assert (event, data) == ("done", {"task_status": "failed"})
+
+    # Test INTERRUPTED maps to aborted
+    event, data = _parse_one(
+        translator.translate(
+            ReplyEndEvent(
+                reply_id="r1",
+                session_id="s1",
+                finished_reason=ReplyFinishedReason.INTERRUPTED,
+            ),
+        ),
+    )
+    assert (event, data) == ("done", {"task_status": "aborted"})
+
+    # Test ERROR finished_reason maps to failed
+    event, data = _parse_one(
+        translator.translate(
+            ReplyEndEvent(
+                reply_id="r1",
+                session_id="s1",
+                finished_reason=ReplyFinishedReason.ERROR,
             ),
         ),
     )

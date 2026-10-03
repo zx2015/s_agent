@@ -21,7 +21,7 @@ class TaskOut(BaseModel):
     id: str
     title: str
     workspace_id: str
-    status: Literal["running", "completed", "suspended", "failed"]
+    status: Literal["running", "completed", "suspended", "failed", "aborted"]
     updated_at: str
     has_artifacts: bool
     is_archived: bool = False
@@ -53,7 +53,7 @@ class UpdateTaskRequest(BaseModel):
     model_config = CamelModel
 
     title: str | None = None
-    status: Literal["running", "completed", "suspended", "failed"] | None = None
+    status: Literal["running", "completed", "suspended", "failed", "aborted"] | None = None
     is_archived: bool | None = None
 
 

@@ -1,3 +1,9 @@
+[project]
+name = "s-agent"
+version = "0.2.0"
+description = "Agent platform based on AgentScope and MateChat"
+requires-python = ">=3.10"
+
 [tool.pytest.ini_options]
 # Adding the repo root to sys.path lets `pytest tests/` work without
 # having to type `PYTHONPATH=. ...` or `python -m pytest` every time.
